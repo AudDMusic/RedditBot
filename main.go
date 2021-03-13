@@ -101,14 +101,12 @@ func main() {
 		panic(err)
 	}
 
-	client.Stream.Posts("")
-
 	bot, err := reddit2.NewBotFromAgentFile("auddbot.agent", 0)
 	if capture(err) {
 		panic(err)
 	}
 
-	cfg := graw.Config{Subreddits: []string{"bottesting"}, Mentions: true}
+	cfg := graw.Config{Mentions: true}
 	handler := &auddBot{bot: bot, client: client, audd: audd.NewClient("test")}
 	handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint)
 	_, wait, err := graw.Run(handler, bot, cfg)
