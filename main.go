@@ -21,29 +21,6 @@ import (
 	"time"
 )
 
-func (r *auddBot) Post(p *reddit2.Post) error {
-	if strings.Contains(p.SelfText, "remind me of this post") {
-		<-time.After(10 * time.Second)
-		return r.bot.SendMessage(
-			p.Author,
-			fmt.Sprintf("Test subject: %s", p.Title),
-			"Test",
-		)
-	}
-	return nil
-}
-func (r *auddBot) Comment(p *reddit2.Comment) error {
-	if strings.Contains(p.Body, "Test") {
-		//<-time.After(10 * time.Second)
-		return r.bot.SendMessage(
-			p.Author,
-			fmt.Sprintf("Test subject"),
-			"Test "+p.Body,
-		)
-	}
-	return nil
-}
-
 func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 	resultUrl := ""
 	var lastPost *reddit.Post
