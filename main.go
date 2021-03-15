@@ -54,6 +54,30 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 		resultUrl += "/DASH_audio.mp4"
 	}
 	if strings.Contains(resultUrl, "reddit.com/") {
+		if strings.Contains(resultUrl, "reddit.com/") {
+			markdownRegex := regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
+			parseFrom := p.Body
+			if lastPost != nil {
+				parseFrom = lastPost.Body
+			}
+			results := markdownRegex.FindAllStringSubmatch(parseFrom, -1)
+			if len(results) == 0 && lastPost != nil {
+				results = markdownRegex.FindAllStringSubmatch(p.Body, -1)
+			}
+			if len(results) != 0 {
+				fmt.Println("Parsed from the text:", results)
+				for u := range results {
+					if strings.HasPrefix(results[u][1], "/") {
+						continue
+					}
+					if strings.HasPrefix(results[u][1], "https://www.reddit.com") {
+						continue
+					}
+					resultUrl = results[u][1]
+					break
+				}
+			}
+		}
 		if lastPost != nil {
 			if strings.Contains(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/") {
 				s := strings.Split(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/")
@@ -61,7 +85,7 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 				resultUrl = "https://v.redd.it/" + s[0] + "/"
 			}
 		}
-		if !strings.Contains(resultUrl, "https://v.redd.it/") {
+		if strings.Contains(resultUrl, "reddit.com/") {
 			jsonUrl := resultUrl + ".json"
 			resp, err := http.Get(jsonUrl)
 			defer resp.Body.Close()
@@ -85,21 +109,6 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 						}
 					}
 				}
-			}
-		}
-		if strings.Contains(resultUrl, "reddit.com/") {
-			markdownRegex := regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
-			parseFrom := p.Body
-			if lastPost != nil {
-				parseFrom = lastPost.Body
-			}
-			results := markdownRegex.FindAllStringSubmatch(parseFrom, -1)
-			if len(results) == 0 && lastPost != nil {
-				results = markdownRegex.FindAllStringSubmatch(p.Body, -1)
-			}
-			if len(results) != 0 {
-				fmt.Println("Parsed from the text:", results)
-				resultUrl = results[0][1]
 			}
 		}
 	}
