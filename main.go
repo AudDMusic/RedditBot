@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -86,6 +87,24 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 				}
 			}
 		}
+		if strings.Contains(resultUrl, "reddit.com/") {
+			markdownRegex := regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
+			parseFrom := p.Body
+			if lastPost != nil {
+				parseFrom = lastPost.Body
+			}
+			results := markdownRegex.FindAllStringSubmatch(parseFrom, -1)
+			if len(results) == 0 && lastPost != nil {
+				results = markdownRegex.FindAllStringSubmatch(p.Body, -1)
+			}
+			if len(results) != 0 {
+				fmt.Println("Parsed from the text:", results)
+				resultUrl = results[0][1]
+			}
+		}
+	}
+	if strings.Contains(resultUrl, "vocaroo.com/") || strings.Contains(resultUrl, "https://voca.ro/") {
+		resultUrl = "https://media1.vocaroo.com/mp3/" + strings.Split(resultUrl, "/")[1]
 	}
 	return resultUrl, nil
 }
@@ -132,7 +151,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 		}
 		for _, song := range results.Songs {
 			if song.SongLink != "" {
-				if _, exists := links[song.SongLink]; exists { // check that this song wasn't outputted before
+				if _, exists := links[song.SongLink]; exists { // making sure this song isn't a duplicate
 					continue
 				}
 				links[song.SongLink] = true
@@ -156,7 +175,6 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 		}
 	}
 	if len(texts) == 0 {
-		// ToDo: respond that no results found
 		return ""
 	}
 	response := texts[0]
@@ -167,7 +185,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 		}
 	}
 	if withLinks {
-		response += "\n\n[**Github**](https://github.com/AudDMusic/RedditBot) | " +
+		response += "\n\n[**GitHub**](https://github.com/AudDMusic/RedditBot) | " +
 			"[**Donate**](https://www.patreon.com/audd) | " +
 			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
 	}
@@ -187,16 +205,32 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 		return nil
 	}
 	skip := GetSkipFromLink(resultUrl)
+	if skip == -1 {
+		// ToDo: parse the comment that mentions the bot and check if there's a different timestamp
+		// (only in the case the t parameter of the url doesn't have a timestamp? or not?)
+	}
 	fmt.Println(resultUrl)
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
-		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":"3"})
+		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":"3"}) //ToDo: maybe limit 2?
 	if capture(err) {
+		return nil
+	}
+	if len(result) == 0 && strings.Contains(resultUrl, "https://www.reddit.com/") {
+		response := "Sorry, I couldn't get the video URL from the post or your comment.\n\n" +
+			"[GitHub](https://github.com/AudDMusic/RedditBot/issues/new) " +
+			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
+			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
+		fmt.Println(response)
+		err = r.bot.Reply(p.Name, response)
 		return nil
 	}
 	withLinks := !strings.Contains(p.Body, "without links")
 	response := GetReply(result, withLinks)
 	if response == "" {
-		return nil
+		response = "Sorry, I couldn't recognize the song.\n\n" +
+			"[GitHub](https://github.com/AudDMusic/RedditBot/issues/new) " +
+			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
+			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
 	}
 	fmt.Println(response)
 	err = r.bot.Reply(p.Name, response)
@@ -241,6 +275,7 @@ func main() {
 	//cfg := graw.Config{Subreddits: []string{"bottesting"}, Mentions: true}
 	cfg := graw.Config{Mentions: true}
 	handler := &auddBot{bot: bot, client: client, audd: audd.NewClient("test")}
+	// See https://docs.audd.io/enterprise
 	handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint)
 	_, wait, err := graw.Run(handler, bot, cfg)
 	if capture(err) {
