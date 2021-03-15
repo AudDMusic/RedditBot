@@ -20,108 +20,147 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-func (r *auddBot) Post(p *reddit2.Post) error {
-	if strings.Contains(p.SelfText, "remind me of this post") {
-		<-time.After(10 * time.Second)
-		return r.bot.SendMessage(
-			p.Author,
-			fmt.Sprintf("Test subject: %s", p.Title),
-			"Test",
-		)
-	}
-	return nil
+var auddToken = ""
+var ravenDSN = "https://...@sentry.io/..."
+
+var triggers = []string{"what's the song", "what is the song", "what's this song", "what is this song",
+	"what song is playing", "what the song is playing", "recognizesong", "auddbot"}
+
+var replySettings = map[string]bool{
+	"mentionLinks": true,
+	"commentLinks": false,
+	"postLinks": false,
+	"mentionReplyAlways": true,
+	"commentReplyAlways": false,
+	"postReplyAlways": false,
 }
 
-func (r *auddBot) Comment(p *reddit2.Comment) error {
-	if strings.Contains(p.Body, "Test") {
-		//<-time.After(10 * time.Second)
-		return r.bot.SendMessage(
-			p.Author,
-			fmt.Sprintf("Test subject"),
-			"Test "+p.Body,
-		)
-	}
-	return nil
-}
+var commentsCounter uint64 = 0
+var postsCounter uint64 = 0
+
 var markdownRegex = regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
 var rxStrict = xurls.Strict()
 
-func (r *auddBot) GetLinkFromComment(comment *reddit2.Message, parentPost *reddit.Post) (string, error) {
+type rComment struct {
+	r1 *reddit.Comment
+	r2 *reddit2.Comment
+}
+
+func linksFromBody(body string) [][]string{
+	results := markdownRegex.FindAllStringSubmatch(body, -1)
+	//if len(results) == 0 {
+		plaintextUrls := rxStrict.FindAllString(body, -1)
+		for i := range plaintextUrls {
+			plaintextUrls[i] = strings.ReplaceAll(plaintextUrls[i], "\\", "")
+			results = append(results, []string{plaintextUrls[i], plaintextUrls[i]})
+		}
+	//}
+	return results
+}
+
+func (r *auddBot) GetLinkFromComment(mention *reddit2.Message, commentsTree []rComment, post *reddit.Post) (string, error) {
+	// Check:
+	// - first for the links in the comment
+	// - then for the links in the comment to which it was a reply
+	// - then for the links in the post
 	var resultUrl string
-	if parentPost != nil {
-		resultUrl = parentPost.URL
+	if post != nil {
+		resultUrl = post.URL
+	}
+	if len(commentsTree) > 0 {
+		if commentsTree[0].r2 != nil {
+			if resultUrl == "" {
+				resultUrl = commentsTree[0].r2.LinkURL
+			}
+			mention = commentToMessage(commentsTree[0].r2)
+			if len(commentsTree) > 1 {
+				commentsTree = commentsTree[1:]
+			} else {
+				commentsTree = make([]rComment, 0)
+			}
+		}
+	} else {
+		if mention == nil {
+			if post == nil {
+				return "", fmt.Errorf("mention, commentsTree, and post are all nil")
+			}
+			mention = &reddit2.Message{
+				Context: post.Permalink,
+				Body: post.Body,
+			}
+		}
 	}
 	if resultUrl == "" {
-		j, _ := json.Marshal(parentPost)
-		capture(fmt.Errorf("got a post without any URL (%s, %s)", comment.Context, string(j)))
+		j, _ := json.Marshal(post)
+		fmt.Printf("Got a post that's not a link or an empty post (https://www.reddit.com%s, %s)\n", mention.Context, string(j))
 		//return "", fmt.Errorf("got a post without any URL (%s)", string(j))
-		resultUrl = "https://www.reddit.com"+ comment.Context
-		fmt.Println("The post should be at", resultUrl)
-		// ToDo: find out why Reddit sometimes doesn't give us the post and fix
-	}
-	if strings.Contains(resultUrl, "https://v.redd.it/") {
-		resultUrl += "/DASH_audio.mp4"
+		resultUrl = "https://www.reddit.com"+ mention.Context
 	}
 	if strings.Contains(resultUrl, "reddit.com/") || resultUrl == "" {
-		if parentPost != nil {
-			if strings.Contains(parentPost.Body, "https://reddit.com/link/"+parentPost.ID+"/video/") {
-				s := strings.Split(parentPost.Body, "https://reddit.com/link/"+parentPost.ID+"/video/")
+		if post != nil {
+			if strings.Contains(post.Body, "https://reddit.com/link/"+post.ID+"/video/") {
+				s := strings.Split(post.Body, "https://reddit.com/link/"+post.ID+"/video/")
 				s = strings.Split(s[1], "/")
 				resultUrl = "https://v.redd.it/" + s[0] + "/"
 			}
 		}
-		if strings.Contains(resultUrl, "reddit.com/") || resultUrl == "" {
-			results := markdownRegex.FindAllStringSubmatch(comment.Body, -1)
-			if len(results) == 0 {
-				plaintextUrls := rxStrict.FindAllString(comment.Body, -1)
-				for i := range plaintextUrls {
-					results = append(results, []string{plaintextUrls[i], plaintextUrls[i]})
-				}
-			}
-			if parentPost != nil {
-				results = append(results, markdownRegex.FindAllStringSubmatch(parentPost.Body, -1)...)
-				plaintextUrls := rxStrict.FindAllString(parentPost.Body, -1)
-				for i := range plaintextUrls {
-					results = append(results, []string{plaintextUrls[i], plaintextUrls[i]})
-				}
-			}
-			if len(results) != 0 {
-				fmt.Println("Parsed from the text:", results)
-				for u := range results {
-					if strings.HasPrefix(results[u][1], "/") {
-						continue
-					}
-					if strings.HasPrefix(results[u][1], "https://www.reddit.com/") {
-						continue
-					}
-					resultUrl = results[u][1]
-					break
-				}
-			}
+	}
+	// Use links:
+	results := linksFromBody(mention.Body) // from the comment
+	if len(commentsTree) > 0 {
+		if commentsTree[0].r1 != nil {
+			results = append(results, linksFromBody(commentsTree[0].r1.Body)...) // from the comment it's a reply to
+		} else {
+			capture(fmt.Errorf("commentTree shouldn't contain an r2 entry at this point! %v", commentsTree))
 		}
-		if strings.Contains(resultUrl, "reddit.com/") {
-			jsonUrl := resultUrl + ".json"
-			resp, err := http.Get(jsonUrl)
-			defer resp.Body.Close()
-			if !capture(err) {
-				var page RedditPageJSON
-				body, err := ioutil.ReadAll(resp.Body)
-				capture(err)
-				fmt.Println(string(body))
-				err = json.Unmarshal(body, &page)
-				capture(err)
-				if len(page) > 0 {
-					if len(page[0].Data.Children) > 0 {
-						if strings.Contains(page[0].Data.Children[0].Data.URL, "v.redd.it") {
-							resultUrl = page[0].Data.Children[0].Data.URL
-						} else {
-							if len(page[0].Data.Children[0].Data.MediaMetadata) > 0 {
-								for s := range page[0].Data.Children[0].Data.MediaMetadata {
-									resultUrl = "https://v.redd.it/" + s + "/"
-								}
+	}
+	if !strings.Contains(resultUrl, "reddit.com/") && resultUrl != "" {
+		results = append(results, []string{resultUrl, resultUrl}) // that's the post link
+	}
+	if post != nil {
+		results = append(results, linksFromBody(post.Body)...) // from the post body
+	}
+	if len(results) != 0 {
+		// And now get the first link that's OK
+		fmt.Println("Parsed from the text:", results)
+		for u := range results {
+			if strings.HasPrefix(results[u][1], "/") {
+				continue
+			}
+			if strings.HasPrefix(results[u][1], "https://www.reddit.com/") {
+				continue
+			}
+			resultUrl = results[u][1]
+			break
+		}
+	}
+
+	if strings.Contains(resultUrl, "reddit.com/") {
+		jsonUrl := resultUrl + ".json"
+		// ToDo: fix for when it's a link to a comment
+		// e.g., https://www.reddit.com/r/NameThatSong/comments/m5o9ck/intense_and_hype_high_bpm_probably_repetitive/gr0y4fx/?context=3
+		resp, err := http.Get(jsonUrl)
+		defer resp.Body.Close()
+		if !capture(err) {
+			var page RedditPageJSON
+			body, err := ioutil.ReadAll(resp.Body)
+			capture(err)
+			//fmt.Println(string(body))
+			fmt.Println("Getting", jsonUrl)
+			err = json.Unmarshal(body, &page)
+			capture(err)
+			if len(page) > 0 {
+				if len(page[0].Data.Children) > 0 {
+					if strings.Contains(page[0].Data.Children[0].Data.URL, "v.redd.it") {
+						resultUrl = page[0].Data.Children[0].Data.URL
+					} else {
+						if len(page[0].Data.Children[0].Data.MediaMetadata) > 0 {
+							for s := range page[0].Data.Children[0].Data.MediaMetadata {
+								resultUrl = "https://v.redd.it/" + s + "/"
 							}
 						}
 					}
@@ -130,15 +169,45 @@ func (r *auddBot) GetLinkFromComment(comment *reddit2.Message, parentPost *reddi
 		}
 	}
 	if strings.Contains(resultUrl, "vocaroo.com/") || strings.Contains(resultUrl, "https://voca.ro/") {
-		resultUrl = "https://media1.vocaroo.com/mp3/" + strings.Split(resultUrl, "/")[1]
+		resultUrl = "https://media1.vocaroo.com/mp3/" + strings.Split(resultUrl, "/")[3]
 	}
+	if strings.Contains(resultUrl, "https://v.redd.it/") {
+		resultUrl += "/DASH_audio.mp4"
+	}
+	if strings.Contains(resultUrl, "https://reddit.com/link/") {
+		capture(fmt.Errorf("got an unparsed URL, %s", resultUrl))
+	}
+	// ToDo: parse the the body and check if there's a timestamp; add it to the t URL parameter
+	// (maybe, only when there's no t parameter in the url?)
 	return resultUrl, nil
 }
 
-func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
-	var lastPost *reddit.Post
-	for parentId := p.ParentID; parentId != ""; {
+func (r *auddBot) GetVideoLink(mention *reddit2.Message, comment *reddit2.Comment) (string, error) {
+	var post *reddit.Post
+	if mention == nil && comment == nil {
+		return "", fmt.Errorf("empty mention and comment")
+	}
+	var parentId string
+	commentsTree := make([]rComment, 0)
+	if mention != nil {
+		parentId = mention.ParentID
+	} else {
+		parentId = comment.ParentID
+		/*_, comments, _, _, err := r.client.Listings.Get(context.Background(), comment.Name)
+		if capture(err) {
+			return "", err
+		}
+		if len(comments) == 0 {
+			return "", fmt.Errorf("can't get the comment")
+		}
+		if comments[0] == nil {
+			return "", fmt.Errorf("can't get the comment")
+		}*/
+		commentsTree = append(commentsTree, rComment{r2: comment})
+	}
+	for ; parentId != ""; {
 		posts, comments, _, _, err := r.client.Listings.Get(context.Background(), parentId)
+		//r.bot.Listing(parentId, )
 		j, _ := json.Marshal([]interface{}{posts, comments})
 		fmt.Println(string(j))
 		parentId = ""
@@ -147,17 +216,19 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 		}
 		if len(posts) > 0 {
 			if posts[0] != nil {
-				lastPost = posts[0]
+				post = posts[0]
 				break
 			}
 		}
 		if len(comments) > 0 {
 			if comments[0] != nil {
+				commentsTree = append(commentsTree, rComment{r1: comments[0]})
 				parentId = comments[0].ParentID
 			}
 		}
 	}
-	return r.GetLinkFromComment(p, lastPost)
+	// ToDo: find out why Reddit sometimes doesn't give us the post and fix
+	return r.GetLinkFromComment(mention, commentsTree, post)
 }
 
 func GetSkipFromLink(resultUrl string) int {
@@ -169,20 +240,19 @@ func GetSkipFromLink(resultUrl string) int {
 			tInt := 0
 			if strings.Contains(t, "m") {
 				s := strings.Split(t, "m")
-				if tsInt, err := strconv.Atoi(s[1]); !capture(err) {
-					tInt += tsInt
-					if strings.Contains(s[0], "h") {
-						s := strings.Split(s[0], "h")
-						if tmInt, err := strconv.Atoi(s[1]); !capture(err) {
-							tInt += tmInt * 60
-						}
-						if thInt, err := strconv.Atoi(s[0]); !capture(err) {
-							tInt += thInt * 60 * 60
-						}
-					} else {
-						if tmInt, err := strconv.Atoi(s[0]); !capture(err) {
-							tInt += tmInt * 60
-						}
+				tsInt, _ := strconv.Atoi(s[1])
+				tInt += tsInt
+				if strings.Contains(s[0], "h") {
+					s := strings.Split(s[0], "h")
+					if tmInt, err := strconv.Atoi(s[1]); !capture(err) {
+						tInt += tmInt * 60
+					}
+					if thInt, err := strconv.Atoi(s[0]); !capture(err) {
+						tInt += thInt * 60 * 60
+					}
+				} else {
+					if tmInt, err := strconv.Atoi(s[0]); !capture(err) {
+						tInt += tmInt * 60
 					}
 				}
 			} else {
@@ -213,10 +283,10 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 			}
 			album := ""
 			label := ""
-			if song.Title != song.Album {
+			if song.Title != song.Album && song.Album != "" {
 				album = "Album: ^(" + song.Album + "). "
 			}
-			if song.Artist != song.Label && song.Label != "Self-released" {
+			if song.Artist != song.Label && song.Label != "Self-released"  && song.Label != "" {
 				label = " by ^(" + song.Label + ")"
 			}
 			score := strconv.Itoa(song.Score) + "%"
@@ -239,31 +309,29 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 			response += fmt.Sprintf("\n\n%d. %s", i+1, text)
 		}
 	}
-	if withLinks {
-		response += "\n\n[GitHub](https://github.com/AudDMusic/RedditBot) | " +
-			"[Donate](https://www.patreon.com/audd) | " +
-			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
-	}
 	return response
 }
 
-func (r *auddBot) Mention(p *reddit2.Message) error {
-	j, _ := json.Marshal(p)
-	fmt.Println(string(j))
-	if !p.New {
-		return nil
+func (r *auddBot) HandleQuery(mention *reddit2.Message, comment *reddit2.Comment, post *reddit2.Post) {
+	var resultUrl, t, parentID, body string
+	var err error
+	if mention != nil {
+		t, parentID, body = "mention", mention.Name, mention.Body
 	}
-	_, err := r.client.Message.Read(context.Background(), p.Name)
-	capture(err)
-	resultUrl, err := r.GetVideoLink(p)
+	if comment != nil {
+		t, parentID, body = "comment", comment.Name, comment.Body
+	}
+	if post != nil {
+		t, parentID, body = "post", post.Name, post.SelfText
+		resultUrl, err = r.GetLinkFromComment(nil, nil,
+			&reddit.Post{ID: post.ID, URL: post.URL, Permalink: post.Permalink, Body: post.SelfText})
+	} else {
+		resultUrl, err = r.GetVideoLink(mention, comment)
+	}
 	if capture(err) {
-		return nil
+		return
 	}
 	skip := GetSkipFromLink(resultUrl)
-	if skip == -1 {
-		// ToDo: parse the comment that mentions the bot and check if there's a different timestamp
-		// (only in the case the t parameter of the url doesn't have a timestamp? or not?)
-	}
 	fmt.Println(resultUrl)
 	limit := 2
 	if strings.Contains(resultUrl, "v.redd.it") {
@@ -272,32 +340,105 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
 	if capture(err) {
-		return nil
+		return
 	}
-	if len(result) == 0 && strings.Contains(resultUrl, "https://www.reddit.com/") {
-		response := "Sorry, I couldn't get the video URL from the post or your comment.\n\n" +
-			"[GitHub](https://github.com/AudDMusic/RedditBot) " +
-			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
-			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
-		fmt.Println(response)
-		err = r.bot.Reply(p.Name, response)
-		return nil
+	links := []string{
+		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
+			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
+		"[Donate](https://www.patreon.com/audd)",
+		"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)",
 	}
-	withLinks := !strings.Contains(p.Body, "without links")
+	donateLink := 1
+	if len(result) == 0 {
+		if !replySettings[t + "ReplyAlways"] {
+			return
+		}
+		links = append(links[:donateLink], links[donateLink:]...)
+	}
+	footer := "\n\n" + strings.Join(links, " | ")
+	withLinks := replySettings[t + "Links"] &&
+		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	response := GetReply(result, withLinks)
 	if response == "" {
-		timestamp := skip * -1 - 1
+		timestamp := skip*-1 - 1
 		timestamp *= 18
-		response = fmt.Sprintf("Sorry, I couldn't recognize the song." +
-			"\n\nI tried to identify music from the [link](%s), up to %d seconds starting at %d seconds.\n\n" +
-			"[GitHub](https://github.com/AudDMusic/RedditBot) " +
-			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
-			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)",
-			resultUrl, limit*18, timestamp)
+		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
+			"\n\nI tried to identify music from the [link](%s) at %d-%d seconds.",
+			resultUrl, timestamp, timestamp+limit*18)
+		if strings.Contains(resultUrl, "https://www.reddit.com/") {
+			response = "Sorry, I couldn't get the video URL from the post or your comment."
+		}
+	}
+	if withLinks {
+		response += footer
+	}
+	if t == "comment" {
+		fmt.Println("testing", t, response)
+		return
 	}
 	fmt.Println(response)
-	err = r.bot.Reply(p.Name, response)
+	err = r.bot.Reply(parentID, response)
 	capture(err)
+}
+
+func (r *auddBot) Mention(p *reddit2.Message) error {
+	// ToDo: find out why we don't get all the mentions
+	// (e.g., https://www.reddit.com/r/NameThatSong/comments/m5l84h/chirptuneish_something_that_would_be_in_mo3/gr0jpc2/?utm_source=reddit&utm_medium=web2x&context=3)
+	j, _ := json.Marshal(p)
+	fmt.Println("Got a mention", string(j))
+	if !p.New {
+		return nil
+	}
+	_, err := r.client.Message.Read(context.Background(), p.Name)
+	capture(err)
+	r.HandleQuery(p, nil, nil)
+	return nil
+}
+
+func (r *auddBot) Comment(p *reddit2.Comment) error {
+	//fmt.Print("c") // why? to test the amount of new comments on Reddit!
+	atomic.AddUint64(&commentsCounter, 1)
+	//return nil
+	compare := strings.ToLower(p.Body)
+	trigger := false
+	for i := range triggers {
+		if strings.Contains(compare, triggers[i]) {
+			trigger = true
+			break
+		}
+	}
+	if !trigger {
+		return nil
+	}
+	j, _ := json.Marshal(p)
+	fmt.Println("Got a comment", string(j))
+	r.HandleQuery(nil, p, nil)
+	return nil
+}
+
+func (r *auddBot) Post(p *reddit2.Post) error {
+	atomic.AddUint64(&postsCounter, 1)
+	compare := strings.ToLower(p.SelfText)
+	trigger := false
+	for i := range triggers {
+		if strings.Contains(compare, triggers[i]) {
+			trigger = true
+			break
+		}
+	}
+	compare = strings.ToLower(p.Title)
+	for i := range triggers {
+		if strings.Contains(compare, triggers[i]) {
+			trigger = true
+			break
+		}
+	}
+	if !trigger {
+		return nil
+	}
+	j, _ := json.Marshal(p)
+	fmt.Println("Got a post", string(j))
+	r.HandleQuery(nil, nil, p)
 	return nil
 }
 
@@ -307,8 +448,8 @@ type auddBot struct {
 	audd *audd.Client
 }
 
-func main() {
-	buf, err := ioutil.ReadFile("auddbot.agent")
+func getCredentials(filename string) *auddBot {
+	buf, err := ioutil.ReadFile(filename)
 	if capture(err) {
 		panic(err)
 	}
@@ -328,25 +469,42 @@ func main() {
 
 	//client.Stream.Posts("")
 
-	bot, err := reddit2.NewBotFromAgentFile("auddbot.agent", 0)
+	bot, err := reddit2.NewBotFromAgentFile(filename, 0)
+	if capture(err) {
+		panic(err)
+	}
+	handler := &auddBot{bot: bot, client: client, audd: audd.NewClient(auddToken)}
+	handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint)
+	return handler
+}
+
+func main() {
+	go func() {
+		for {
+			fmt.Println("Comments:", atomic.LoadUint64(&commentsCounter), "posts:", atomic.LoadUint64(&postsCounter))
+			<- time.NewTicker(time.Minute).C
+		}
+	}()
+	//client.Stream.Posts("")
+
+	handler := getCredentials("RecognizeSong.agent")
+	// See https://docs.audd.io/enterprise
+	cfg := graw.Config{Mentions: true}
+	_, wait, err := graw.Run(handler, handler.bot, cfg)
 	if capture(err) {
 		panic(err)
 	}
 
-	//cfg := graw.Config{Subreddits: []string{"bottesting"}, Mentions: true}
-	cfg := graw.Config{Mentions: true}
-	handler := &auddBot{bot: bot, client: client, audd: audd.NewClient("test")}
-	// See https://docs.audd.io/enterprise
-	handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint)
-	_, wait, err := graw.Run(handler, bot, cfg)
-	if capture(err) {
-		panic(err)
-	}
-	fmt.Println("graw run failed: ", wait())
+	handler2 := getCredentials("auddbot.agent")
+	cfg2 := graw.Config{SubredditComments: []string{"all"}, Subreddits: []string{"all"}, Mentions: true}
+	_, wait2, err := graw.Run(handler2, handler2.bot, cfg2)
+	capture(err)
+	fmt.Println("started")
+	fmt.Println("graw run failed: ", wait(), wait2())
 }
 
 func init() {
-	err := raven.SetDSN("")
+	err := raven.SetDSN(ravenDSN)
 	if err != nil {
 		panic(err)
 	}
@@ -366,34 +524,28 @@ func capture(err error) bool {
 	return true
 }
 
+func commentToMessage(comment *reddit2.Comment) *reddit2.Message {
+	if comment == nil {
+		return nil
+	}
+	return &reddit2.Message{
+		ID:               comment.ID,
+		Name:             comment.Name,
+		CreatedUTC:       comment.CreatedUTC,
+		Author:           comment.Author,
+		Body:             comment.Body,
+		BodyHTML:         comment.BodyHTML,
+		Context:          comment.Permalink,
+		ParentID:         comment.ParentID,
+		Subreddit:        comment.Subreddit,
+		WasComment:       true,
+	}
+}
 
 type RedditPageJSON []struct {
-	Kind string `json:"kind"`
 	Data struct {
-		Modhash  string `json:"modhash"`
-		Dist     int    `json:"dist"`
 		Children []struct {
-			Kind string `json:"kind"`
 			Data struct {
-				ApprovedAtUtc         interface{}   `json:"approved_at_utc"`
-				Subreddit             string        `json:"subreddit"`
-				Selftext              string        `json:"selftext"`
-				UserReports           []interface{} `json:"user_reports"`
-				Saved                 bool          `json:"saved"`
-				ModReasonTitle        interface{}   `json:"mod_reason_title"`
-				Gilded                int           `json:"gilded"`
-				Clicked               bool          `json:"clicked"`
-				Title                 string        `json:"title"`
-				LinkFlairRichtext     []interface{} `json:"link_flair_richtext"`
-				SubredditNamePrefixed string        `json:"subreddit_name_prefixed"`
-				Hidden                bool          `json:"hidden"`
-				Pwls                  int           `json:"pwls"`
-				LinkFlairCSSClass     string        `json:"link_flair_css_class"`
-				Downs                 int           `json:"downs"`
-				ThumbnailHeight       interface{}   `json:"thumbnail_height"`
-				TopAwardedType        interface{}   `json:"top_awarded_type"`
-				ParentWhitelistStatus string        `json:"parent_whitelist_status"`
-				HideScore             bool          `json:"hide_score"`
 				MediaMetadata         map[string]struct {
 						Status  string `json:"status"`
 						E       string `json:"e"`
@@ -404,96 +556,7 @@ type RedditPageJSON []struct {
 						ID      string `json:"id"`
 						IsGif   bool   `json:"isGif"`
 					}								   `json:"media_metadata"`
-				Name                       string      `json:"name"`
-				Quarantine                 bool        `json:"quarantine"`
-				LinkFlairTextColor         string      `json:"link_flair_text_color"`
-				UpvoteRatio                float64     `json:"upvote_ratio"`
-				AuthorFlairBackgroundColor interface{} `json:"author_flair_background_color"`
-				SubredditType              string      `json:"subreddit_type"`
-				Ups                        int         `json:"ups"`
-				TotalAwardsReceived        int         `json:"total_awards_received"`
-				MediaEmbed                 struct {
-				} `json:"media_embed"`
-				ThumbnailWidth        interface{} `json:"thumbnail_width"`
-				AuthorFlairTemplateID interface{} `json:"author_flair_template_id"`
-				IsOriginalContent     bool        `json:"is_original_content"`
-				AuthorFullname        string      `json:"author_fullname"`
-				SecureMedia           interface{} `json:"secure_media"`
-				IsRedditMediaDomain   bool        `json:"is_reddit_media_domain"`
-				IsMeta                bool        `json:"is_meta"`
-				Category              interface{} `json:"category"`
-				SecureMediaEmbed      struct {
-				} `json:"secure_media_embed"`
-				LinkFlairText       string        `json:"link_flair_text"`
-				CanModPost          bool          `json:"can_mod_post"`
-				Score               int           `json:"score"`
-				ApprovedBy          interface{}   `json:"approved_by"`
-				AuthorPremium       bool          `json:"author_premium"`
-				Thumbnail           string        `json:"thumbnail"`
-				Edited              bool       `json:"edited"`
-				AuthorFlairCSSClass interface{}   `json:"author_flair_css_class"`
-				AuthorFlairRichtext []interface{} `json:"author_flair_richtext"`
-				Gildings            struct {
-				} `json:"gildings"`
-				ContentCategories        interface{}   `json:"content_categories"`
-				IsSelf                   bool          `json:"is_self"`
-				ModNote                  interface{}   `json:"mod_note"`
-				Created                  float64       `json:"created"`
-				LinkFlairType            string        `json:"link_flair_type"`
-				Wls                      int           `json:"wls"`
-				RemovedByCategory        interface{}   `json:"removed_by_category"`
-				BannedBy                 interface{}   `json:"banned_by"`
-				AuthorFlairType          string        `json:"author_flair_type"`
-				Domain                   string        `json:"domain"`
-				AllowLiveComments        bool          `json:"allow_live_comments"`
-				SelftextHTML             string        `json:"selftext_html"`
-				Likes                    interface{}   `json:"likes"`
-				SuggestedSort            string        `json:"suggested_sort"`
-				BannedAtUtc              interface{}   `json:"banned_at_utc"`
-				ViewCount                interface{}   `json:"view_count"`
-				Archived                 bool          `json:"archived"`
-				NoFollow                 bool          `json:"no_follow"`
-				IsCrosspostable          bool          `json:"is_crosspostable"`
-				Pinned                   bool          `json:"pinned"`
-				Over18                   bool          `json:"over_18"`
-				AllAwardings             []interface{} `json:"all_awardings"`
-				Awarders                 []interface{} `json:"awarders"`
-				MediaOnly                bool          `json:"media_only"`
-				LinkFlairTemplateID      string        `json:"link_flair_template_id"`
-				CanGild                  bool          `json:"can_gild"`
-				Spoiler                  bool          `json:"spoiler"`
-				Locked                   bool          `json:"locked"`
-				AuthorFlairText          interface{}   `json:"author_flair_text"`
-				TreatmentTags            []interface{} `json:"treatment_tags"`
-				Visited                  bool          `json:"visited"`
-				RemovedBy                interface{}   `json:"removed_by"`
-				NumReports               interface{}   `json:"num_reports"`
-				Distinguished            interface{}   `json:"distinguished"`
-				SubredditID              string        `json:"subreddit_id"`
-				ModReasonBy              interface{}   `json:"mod_reason_by"`
-				RemovalReason            interface{}   `json:"removal_reason"`
-				LinkFlairBackgroundColor string        `json:"link_flair_background_color"`
-				ID                       string        `json:"id"`
-				IsRobotIndexable         bool          `json:"is_robot_indexable"`
-				NumDuplicates            int           `json:"num_duplicates"`
-				ReportReasons            interface{}   `json:"report_reasons"`
-				Author                   string        `json:"author"`
-				DiscussionType           interface{}   `json:"discussion_type"`
-				NumComments              int           `json:"num_comments"`
-				SendReplies              bool          `json:"send_replies"`
-				Media                    interface{}   `json:"media"`
-				ContestMode              bool          `json:"contest_mode"`
-				AuthorPatreonFlair       bool          `json:"author_patreon_flair"`
-				AuthorFlairTextColor     interface{}   `json:"author_flair_text_color"`
-				Permalink                string        `json:"permalink"`
-				WhitelistStatus          string        `json:"whitelist_status"`
-				Stickied                 bool          `json:"stickied"`
 				URL                      string        `json:"url"`
-				SubredditSubscribers     int           `json:"subreddit_subscribers"`
-				CreatedUtc               float64       `json:"created_utc"`
-				NumCrossposts            int           `json:"num_crossposts"`
-				ModReports               []interface{} `json:"mod_reports"`
-				IsVideo                  bool          `json:"is_video"`
 			} `json:"data"`
 		} `json:"children"`
 		After  interface{} `json:"after"`
