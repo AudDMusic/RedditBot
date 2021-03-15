@@ -48,7 +48,12 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 	}
 	if resultUrl == "" {
 		j, _ := json.Marshal(lastPost)
-		return "", fmt.Errorf("got a post without any URL (%s)", string(j))
+		capture(fmt.Errorf("got a post without any URL (%s, %s)", p.Context, string(j)))
+		//return "", fmt.Errorf("got a post without any URL (%s)", string(j))
+		resultUrl = "https://www.reddit.com"+p.Context
+		fmt.Println("The post should be at", resultUrl)
+		// ToDo: sometimes Reddit doesn't give the post; find out why and fix
+		// ToDo: parse plaintext links
 	}
 	if strings.Contains(resultUrl, "https://v.redd.it/") {
 		resultUrl += "/DASH_audio.mp4"
@@ -194,8 +199,8 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 		}
 	}
 	if withLinks {
-		response += "\n\n[**GitHub**](https://github.com/AudDMusic/RedditBot) | " +
-			"[**Donate**](https://www.patreon.com/audd) | " +
+		response += "\n\n[GitHub](https://github.com/AudDMusic/RedditBot) | " +
+			"[Donate](https://www.patreon.com/audd) | " +
 			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
 	}
 	return response
@@ -226,7 +231,7 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 	}
 	if len(result) == 0 && strings.Contains(resultUrl, "https://www.reddit.com/") {
 		response := "Sorry, I couldn't get the video URL from the post or your comment.\n\n" +
-			"[GitHub](https://github.com/AudDMusic/RedditBot/issues/new) " +
+			"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
 			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
 		fmt.Println(response)
@@ -237,7 +242,7 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 	response := GetReply(result, withLinks)
 	if response == "" {
 		response = "Sorry, I couldn't recognize the song.\n\n" +
-			"[GitHub](https://github.com/AudDMusic/RedditBot/issues/new) " +
+			"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
 			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
 	}
