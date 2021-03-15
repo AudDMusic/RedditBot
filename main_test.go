@@ -72,6 +72,8 @@ func TestGetSkipFromLink(t *testing.T) {
 		{"https://youtu.be/aCcVpANtJGE?t=test", -1},
 		{"https://youtu.be/aCcVpANtJGE?t=53", -3},
 		{"https://www.youtube.com/watch?v=aCcVpANtJGE&t=53s", -3},
+		{"https://youtu.be/ySpo0sBeJ9Q?t=0m30s", -2},
+		{"https://youtu.be/J0a2Prc_MQo?t=5m45s", -20},
 	}
 	for i := range cases {
 		name := fmt.Sprintf("%s, %d", cases[i].VideoUrl, cases[i].skip)
