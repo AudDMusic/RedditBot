@@ -133,6 +133,10 @@ func GetSkipFromLink(resultUrl string) int {
 						if thInt, err := strconv.Atoi(s[0]); !capture(err) {
 							tInt += thInt * 60 * 60
 						}
+					} else {
+						if tmInt, err := strconv.Atoi(s[0]); !capture(err) {
+							tInt += tmInt * 60
+						}
 					}
 				}
 			} else {
