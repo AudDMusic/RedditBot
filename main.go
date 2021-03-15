@@ -60,13 +60,12 @@ func (r *auddBot) GetLinkFromComment(comment *reddit2.Message, parentPost *reddi
 		//return "", fmt.Errorf("got a post without any URL (%s)", string(j))
 		resultUrl = "https://www.reddit.com"+ comment.Context
 		fmt.Println("The post should be at", resultUrl)
-		// ToDo: sometimes Reddit doesn't give the post; find out why and fix
-		// ToDo: parse plaintext links
+		// ToDo: find out why Reddit sometimes doesn't give us the post and fix
 	}
 	if strings.Contains(resultUrl, "https://v.redd.it/") {
 		resultUrl += "/DASH_audio.mp4"
 	}
-	if strings.Contains(resultUrl, "reddit.com/") {
+	if strings.Contains(resultUrl, "reddit.com/") || resultUrl == "" {
 		if parentPost != nil {
 			if strings.Contains(parentPost.Body, "https://reddit.com/link/"+parentPost.ID+"/video/") {
 				s := strings.Split(parentPost.Body, "https://reddit.com/link/"+parentPost.ID+"/video/")
@@ -74,7 +73,7 @@ func (r *auddBot) GetLinkFromComment(comment *reddit2.Message, parentPost *reddi
 				resultUrl = "https://v.redd.it/" + s[0] + "/"
 			}
 		}
-		if strings.Contains(resultUrl, "reddit.com/") {
+		if strings.Contains(resultUrl, "reddit.com/") || resultUrl == "" {
 			results := markdownRegex.FindAllStringSubmatch(comment.Body, -1)
 			if len(results) == 0 {
 				plaintextUrls := rxStrict.FindAllString(comment.Body, -1)
@@ -266,8 +265,12 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 		// (only in the case the t parameter of the url doesn't have a timestamp? or not?)
 	}
 	fmt.Println(resultUrl)
+	limit := 2
+	if strings.Contains(resultUrl, "v.redd.it") {
+		limit = 3
+	}
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
-		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":"3"}) //ToDo: maybe limit 2?
+		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)}) //ToDo: maybe limit 2?
 	if capture(err) {
 		return nil
 	}
@@ -286,10 +289,11 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 		timestamp := skip * -1 - 1
 		timestamp *= 18
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song." +
-			"\n\nI tried to identify music from the [link](%s), up to 56 seconds starting at %d seconds.\n\n" +
+			"\n\nI tried to identify music from the [link](%s), up to %d seconds starting at %d seconds.\n\n" +
 			"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
-			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)", resultUrl, timestamp)
+			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)",
+			resultUrl, limit*18, timestamp)
 	}
 	fmt.Println(response)
 	err = r.bot.Reply(p.Name, response)
@@ -304,8 +308,6 @@ type auddBot struct {
 }
 
 func main() {
-	reddit.DefaultClient()
-
 	buf, err := ioutil.ReadFile("auddbot.agent")
 	if capture(err) {
 		panic(err)
@@ -324,7 +326,7 @@ func main() {
 		panic(err)
 	}
 
-	client.Stream.Posts("")
+	//client.Stream.Posts("")
 
 	bot, err := reddit2.NewBotFromAgentFile("auddbot.agent", 0)
 	if capture(err) {
