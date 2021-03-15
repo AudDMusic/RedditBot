@@ -270,7 +270,7 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 		limit = 3
 	}
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
-		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)}) //ToDo: maybe limit 2?
+		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
 	if capture(err) {
 		return nil
 	}
