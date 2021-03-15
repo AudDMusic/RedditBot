@@ -54,15 +54,18 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 		resultUrl += "/DASH_audio.mp4"
 	}
 	if strings.Contains(resultUrl, "reddit.com/") {
+		if lastPost != nil {
+			if strings.Contains(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/") {
+				s := strings.Split(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/")
+				s = strings.Split(s[1], "/")
+				resultUrl = "https://v.redd.it/" + s[0] + "/"
+			}
+		}
 		if strings.Contains(resultUrl, "reddit.com/") {
 			markdownRegex := regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
-			parseFrom := p.Body
+			results := markdownRegex.FindAllStringSubmatch(p.Body, -1)
 			if lastPost != nil {
-				parseFrom = lastPost.Body
-			}
-			results := markdownRegex.FindAllStringSubmatch(parseFrom, -1)
-			if len(results) == 0 && lastPost != nil {
-				results = markdownRegex.FindAllStringSubmatch(p.Body, -1)
+				results = append(results, markdownRegex.FindAllStringSubmatch(lastPost.Body, -1)...)
 			}
 			if len(results) != 0 {
 				fmt.Println("Parsed from the text:", results)
@@ -70,19 +73,12 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 					if strings.HasPrefix(results[u][1], "/") {
 						continue
 					}
-					if strings.HasPrefix(results[u][1], "https://www.reddit.com") {
+					if strings.HasPrefix(results[u][1], "https://www.reddit.com/") {
 						continue
 					}
 					resultUrl = results[u][1]
 					break
 				}
-			}
-		}
-		if lastPost != nil {
-			if strings.Contains(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/") {
-				s := strings.Split(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/")
-				s = strings.Split(s[1], "/")
-				resultUrl = "https://v.redd.it/" + s[0] + "/"
 			}
 		}
 		if strings.Contains(resultUrl, "reddit.com/") {
