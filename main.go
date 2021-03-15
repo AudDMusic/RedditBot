@@ -13,6 +13,7 @@ import (
 	"github.com/turnage/redditproto"
 	"github.com/vartanbeno/go-reddit/v2/reddit"
 	"io/ioutil"
+	"mvdan.cc/xurls/v2"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -22,35 +23,42 @@ import (
 	"time"
 )
 
-func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
-	resultUrl := ""
-	var lastPost *reddit.Post
-	for parentId := p.ParentID; parentId != ""; {
-		posts, comments, _, _, err := r.client.Listings.Get(context.Background(), parentId)
-		j, _ := json.Marshal([]interface{}{posts, comments})
-		fmt.Println(string(j))
-		parentId = ""
-		if err != nil {
-			return "", err
-		}
-		if len(posts) > 0 {
-			if posts[0] != nil {
-				lastPost = posts[0]
-				resultUrl = posts[0].URL
-				break
-			}
-		}
-		if len(comments) > 0 {
-			if comments[0] != nil {
-				parentId = comments[0].ParentID
-			}
-		}
+func (r *auddBot) Post(p *reddit2.Post) error {
+	if strings.Contains(p.SelfText, "remind me of this post") {
+		<-time.After(10 * time.Second)
+		return r.bot.SendMessage(
+			p.Author,
+			fmt.Sprintf("Test subject: %s", p.Title),
+			"Test",
+		)
+	}
+	return nil
+}
+
+func (r *auddBot) Comment(p *reddit2.Comment) error {
+	if strings.Contains(p.Body, "Test") {
+		//<-time.After(10 * time.Second)
+		return r.bot.SendMessage(
+			p.Author,
+			fmt.Sprintf("Test subject"),
+			"Test "+p.Body,
+		)
+	}
+	return nil
+}
+var markdownRegex = regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
+var rxStrict = xurls.Strict()
+
+func (r *auddBot) GetLinkFromComment(comment *reddit2.Message, parentPost *reddit.Post) (string, error) {
+	var resultUrl string
+	if parentPost != nil {
+		resultUrl = parentPost.URL
 	}
 	if resultUrl == "" {
-		j, _ := json.Marshal(lastPost)
-		capture(fmt.Errorf("got a post without any URL (%s, %s)", p.Context, string(j)))
+		j, _ := json.Marshal(parentPost)
+		capture(fmt.Errorf("got a post without any URL (%s, %s)", comment.Context, string(j)))
 		//return "", fmt.Errorf("got a post without any URL (%s)", string(j))
-		resultUrl = "https://www.reddit.com"+p.Context
+		resultUrl = "https://www.reddit.com"+ comment.Context
 		fmt.Println("The post should be at", resultUrl)
 		// ToDo: sometimes Reddit doesn't give the post; find out why and fix
 		// ToDo: parse plaintext links
@@ -59,18 +67,27 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 		resultUrl += "/DASH_audio.mp4"
 	}
 	if strings.Contains(resultUrl, "reddit.com/") {
-		if lastPost != nil {
-			if strings.Contains(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/") {
-				s := strings.Split(lastPost.Body, "https://reddit.com/link/"+lastPost.ID+"/video/")
+		if parentPost != nil {
+			if strings.Contains(parentPost.Body, "https://reddit.com/link/"+parentPost.ID+"/video/") {
+				s := strings.Split(parentPost.Body, "https://reddit.com/link/"+parentPost.ID+"/video/")
 				s = strings.Split(s[1], "/")
 				resultUrl = "https://v.redd.it/" + s[0] + "/"
 			}
 		}
 		if strings.Contains(resultUrl, "reddit.com/") {
-			markdownRegex := regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
-			results := markdownRegex.FindAllStringSubmatch(p.Body, -1)
-			if lastPost != nil {
-				results = append(results, markdownRegex.FindAllStringSubmatch(lastPost.Body, -1)...)
+			results := markdownRegex.FindAllStringSubmatch(comment.Body, -1)
+			if len(results) == 0 {
+				plaintextUrls := rxStrict.FindAllString(comment.Body, -1)
+				for i := range plaintextUrls {
+					results = append(results, []string{plaintextUrls[i], plaintextUrls[i]})
+				}
+			}
+			if parentPost != nil {
+				results = append(results, markdownRegex.FindAllStringSubmatch(parentPost.Body, -1)...)
+				plaintextUrls := rxStrict.FindAllString(parentPost.Body, -1)
+				for i := range plaintextUrls {
+					results = append(results, []string{plaintextUrls[i], plaintextUrls[i]})
+				}
 			}
 			if len(results) != 0 {
 				fmt.Println("Parsed from the text:", results)
@@ -117,6 +134,31 @@ func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
 		resultUrl = "https://media1.vocaroo.com/mp3/" + strings.Split(resultUrl, "/")[1]
 	}
 	return resultUrl, nil
+}
+
+func (r *auddBot) GetVideoLink(p *reddit2.Message) (string, error) {
+	var lastPost *reddit.Post
+	for parentId := p.ParentID; parentId != ""; {
+		posts, comments, _, _, err := r.client.Listings.Get(context.Background(), parentId)
+		j, _ := json.Marshal([]interface{}{posts, comments})
+		fmt.Println(string(j))
+		parentId = ""
+		if err != nil {
+			return "", err
+		}
+		if len(posts) > 0 {
+			if posts[0] != nil {
+				lastPost = posts[0]
+				break
+			}
+		}
+		if len(comments) > 0 {
+			if comments[0] != nil {
+				parentId = comments[0].ParentID
+			}
+		}
+	}
+	return r.GetLinkFromComment(p, lastPost)
 }
 
 func GetSkipFromLink(resultUrl string) int {
@@ -241,10 +283,13 @@ func (r *auddBot) Mention(p *reddit2.Message) error {
 	withLinks := !strings.Contains(p.Body, "without links")
 	response := GetReply(result, withLinks)
 	if response == "" {
-		response = "Sorry, I couldn't recognize the song.\n\n" +
+		timestamp := skip * -1 - 1
+		timestamp *= 18
+		response = fmt.Sprintf("Sorry, I couldn't recognize the song." +
+			"\n\nI tried to identify music from the [link](%s), up to 56 seconds starting at %d seconds.\n\n" +
 			"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new) | " +
-			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)"
+			"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music20recognition)", resultUrl, timestamp)
 	}
 	fmt.Println(response)
 	err = r.bot.Reply(p.Name, response)
