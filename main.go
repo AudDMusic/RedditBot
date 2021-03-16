@@ -201,7 +201,7 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 		s := strings.TrimSuffix(resultUrl, "/")
 		s = strings.ReplaceAll(s, "/player", "")
 		s_ := strings.Split(s, "/")
-		resultUrl = s_[len(s_)-1]
+		resultUrl = "https://v.redd.it/" + s_[len(s_)-1] + "/DASH_audio.mp4"
 	}
 	if strings.Contains(resultUrl, "https://reddit.com/link/") {
 		capture(fmt.Errorf("got an unparsed URL, %s", resultUrl))
