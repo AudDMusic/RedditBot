@@ -29,8 +29,10 @@ import (
 var auddToken = "test"
 var ravenDSN = "https://...:...@sentry.io/..."
 
-var triggers = []string{"what's the song", "what is the song", "what's this song", "what is this song",
+var triggers = []string{"whats the song", "what is the song", "whats this song", "what is this song",
 	"what song is playing", "what song is this", "what the song is playing",  "what the song is this",
+	"whats the music", "what is the music", "whats this music", "what is this music",
+	"whats the track in this", "what is the track in this",
 	"recognizesong", "auddbot", "u/find-song"}
 var antiTriggers = []string{"has been automatically removed", "your comment was removed"}
 
@@ -103,11 +105,13 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 			if resultUrl == "" {
 				//resultUrl = commentsTree[0].r2.LinkURL
 			}
-			mention = commentToMessage(commentsTree[0])
-			if len(commentsTree) > 1 {
-				commentsTree = commentsTree[1:]
-			} else {
-				commentsTree = make([]*models.Comment, 0)
+			if mention == nil {
+				mention = commentToMessage(commentsTree[0])
+				if len(commentsTree) > 1 {
+					commentsTree = commentsTree[1:]
+				} else {
+					commentsTree = make([]*models.Comment, 0)
+				}
 			}
 		}
 	} else {
@@ -283,6 +287,9 @@ func GetSkipFromLink(resultUrl string) int {
 }
 
 func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string {
+	if len(result) == 0 {
+		return ""
+	}
 	links := map[string]bool{}
 	texts := make([]string, 0)
 	for _, results := range result {
@@ -392,19 +399,27 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	body = strings.ToLower(body)
 	if strings.HasSuffix(resultUrl, ".m3u8") {
-		// ToDo: recognize music from live streams
 		fmt.Println("\nGot a livestream", resultUrl)
-		// c <- false
-		// return
 		limit = 1
 	}
+	withLinks := (strings.Contains(body, "u/recognizesong") || replySettings[t + "Links"]) &&
+		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
-	if capture(err) {
+	response := GetReply(result, withLinks)
+	if err != nil {
+		if v, ok := err.(*audd.Error); ok {
+			if v.ErrorCode == 501 {
+				response = fmt.Sprintf("Sorry, I couldn't get any audio from the [link](%s)", resultUrl)
+			}
+		}
+		if response == "" {
+			capture(err)
+		}
 		c <- d{false, resultUrl}
 		return
 	}
-	links := []string{
+	footerLinks := []string{
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
 		"[Donate](https://www.patreon.com/audd)",
@@ -426,18 +441,15 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			fmt.Println("No result")
 			return
 		}
-		links = append(links[:donateLink], links[donateLink+1:]...)
+		footerLinks = append(footerLinks[:donateLink], footerLinks[donateLink+1:]...)
 	} else {
 		c <- d{true, resultUrl}
 	}
-	footer := "\n\n" + strings.Join(links, " | ")
+	footer := "\n\n" + strings.Join(footerLinks, " | ")
 
 	if strings.HasSuffix(resultUrl, ".m3u8") {
 		fmt.Println("\nStream results:", result)
 	}
-	withLinks := (strings.Contains(body, "u/recognizesong") || replySettings[t + "Links"]) &&
-		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
-	response := GetReply(result, withLinks)
 	if response == "" {
 		timestamp := skip*-1 - 1
 		timestamp *= 18
@@ -470,7 +482,7 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		fmt.Println("Not a new mention")
 		return nil
 	}
-	compare := strings.ToLower(p.Body)
+	compare := getBodyToCompare(p.Body)
 	for i := range antiTriggers {
 		if strings.Contains(compare, antiTriggers[i]) {
 			fmt.Println("Got an anti-trigger", p.Body)
@@ -483,12 +495,23 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 	r.HandleQuery(p, nil, nil)
 	return nil
 }
+func replaceSlice(s, new string, oldStrings ...string) string {
+	for _, old := range oldStrings {
+		s = strings.ReplaceAll(s, old, new)
+	}
+	return s
+}
+func getBodyToCompare(body string) string {
+	body = strings.ToLower(body)
+	body = replaceSlice(body, "", "'", "’", "`")
+	return body
+}
 
 func (r *auddBot) Comment(p *models.Comment) {
 	//fmt.Print("c") // why? to test the amount of new comments on Reddit!
 	atomic.AddInt64(&commentsCounter, 1)
 	//return nil
-	compare := strings.ToLower(p.Body)
+	compare := getBodyToCompare(p.Body)
 	trigger := false
 	for i := range triggers {
 		if strings.Contains(compare, triggers[i]) {
@@ -513,7 +536,7 @@ func (r *auddBot) Comment(p *models.Comment) {
 
 func (r *auddBot) Post(p *models.Post)  {
 	atomic.AddInt64(&postsCounter, 1)
-	compare := strings.ToLower(p.Selftext)
+	compare := getBodyToCompare(p.Selftext)
 	trigger := false
 	for i := range triggers {
 		if strings.Contains(compare, triggers[i]) {
