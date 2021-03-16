@@ -327,8 +327,13 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 	return response
 }
 
-var locker = map[string]chan bool{}
-var lockerMu = &sync.Mutex{}
+type d struct{
+	b bool
+	u string
+}
+
+var avoidDuplicates = map[string]chan d{}
+var avoidDuplicatesMu = &sync.Mutex{}
 
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
 	var resultUrl, t, parentID, body string
@@ -345,23 +350,25 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 
 	// Avoid handling of both the comment from r/all and the mention
-	var c chan bool
+	var previousUrl string
+	var c chan d
 	var exists bool
-	lockerMu.Lock()
-	if c, exists = locker[parentID]; exists {
-		delete(locker, parentID)
-		lockerMu.Unlock()
+	avoidDuplicatesMu.Lock()
+	if c, exists = avoidDuplicates[parentID]; exists {
+		delete(avoidDuplicates, parentID)
+		avoidDuplicatesMu.Unlock()
 		results := <-c
-		if results {
+		if results.b {
 			fmt.Println("Ignored a duplicate")
 			return
 		}
 		fmt.Println("Attempting to recognize the song again")
-		c = make(chan bool, 1)
+		c = make(chan d, 1)
+		previousUrl = results.u
 	} else {
-		c = make(chan bool, 1)
-		locker[parentID] = c
-		lockerMu.Unlock()
+		c = make(chan d, 1)
+		avoidDuplicates[parentID] = c
+		avoidDuplicatesMu.Unlock()
 	}
 
 	if post != nil {
@@ -374,6 +381,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 
 	skip := GetSkipFromLink(resultUrl)
+	if resultUrl == previousUrl {
+		fmt.Println("Got the same URL, skipping")
+		return
+	}
 	fmt.Println(resultUrl)
 	limit := 2
 	if strings.Contains(resultUrl, "v.redd.it") {
@@ -390,7 +401,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
 	if capture(err) {
-		c <- false
+		c <- d{false, resultUrl}
 		return
 	}
 	links := []string{
@@ -401,10 +412,14 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	donateLink := 1
 	if len(result) == 0 {
+		if exists {
+			fmt.Println("Couldn't recognize in a duplicate")
+			return
+		}
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
-			c <- true
+			c <- d{true, resultUrl}
 		} else {
-			c <- false
+			c <- d{false, resultUrl}
 		}
 		if !replySettings[t + "ReplyAlways"] &&
 			!strings.Contains(body, "u/recognizesong") && !strings.Contains(body, "u/auddbot") {
@@ -413,7 +428,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 		links = append(links[:donateLink], links[donateLink+1:]...)
 	} else {
-		c <- true
+		c <- d{true, resultUrl}
 	}
 	footer := "\n\n" + strings.Join(links, " | ")
 
