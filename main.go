@@ -26,12 +26,13 @@ import (
 	"time"
 )
 
-var auddToken = ""
+var auddToken = "test"
 var ravenDSN = "https://...:...@sentry.io/..."
 
 var triggers = []string{"what's the song", "what is the song", "what's this song", "what is this song",
 	"what song is playing", "what song is this", "what the song is playing",  "what the song is this",
 	"recognizesong", "auddbot", "u/find-song"}
+var antiTriggers = []string{"has been automatically removed", "your comment was removed"}
 
 var replySettings = map[string]bool{
 	"mentionLinks": true,
@@ -244,6 +245,9 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 
 func GetSkipFromLink(resultUrl string) int {
 	skip := -1
+	if strings.HasSuffix(resultUrl, ".m3u8") {
+		return skip
+	}
 	u, err := url.Parse(resultUrl)
 	if err == nil {
 		if t := u.Query().Get("t"); t != "" {
@@ -338,16 +342,13 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	if post != nil {
 		t, parentID, body = "post", string(post.GetID()), post.Selftext
-		resultUrl, err = r.GetLinkFromComment(nil, nil, post)
-	} else {
-		resultUrl, err = r.GetVideoLink(mention, comment)
 	}
-	if capture(err) {
-		return
-	}
-	c := make(chan bool, 1)
+
+	// Avoid handling of both the comment from r/all and the mention
+	var c chan bool
+	var exists bool
 	lockerMu.Lock()
-	if c, exists := locker[parentID]; exists {
+	if c, exists = locker[parentID]; exists {
 		delete(locker, parentID)
 		lockerMu.Unlock()
 		results := <-c
@@ -356,22 +357,35 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			return
 		}
 		fmt.Println("Attempting to recognize the song again")
+		c = make(chan bool, 1)
 	} else {
+		c = make(chan bool, 1)
 		locker[parentID] = c
 		lockerMu.Unlock()
 	}
-	body = strings.ToLower(body)
-	if strings.HasSuffix(resultUrl, ".m3u8") {
-		//ToDo: recognize music from live streams
-		fmt.Println("\nGot a livestream", resultUrl)
-		c <- false
+
+	if post != nil {
+		resultUrl, err = r.GetLinkFromComment(nil, nil, post)
+	} else {
+		resultUrl, err = r.GetVideoLink(mention, comment)
+	}
+	if capture(err) {
 		return
 	}
+
 	skip := GetSkipFromLink(resultUrl)
 	fmt.Println(resultUrl)
 	limit := 2
 	if strings.Contains(resultUrl, "v.redd.it") {
 		limit = 3
+	}
+	body = strings.ToLower(body)
+	if strings.HasSuffix(resultUrl, ".m3u8") {
+		// ToDo: recognize music from live streams
+		fmt.Println("\nGot a livestream", resultUrl)
+		// c <- false
+		// return
+		limit = 1
 	}
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
@@ -388,9 +402,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	donateLink := 1
 	if len(result) == 0 {
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
-			c <- false
-		} else {
 			c <- true
+		} else {
+			c <- false
 		}
 		if !replySettings[t + "ReplyAlways"] &&
 			!strings.Contains(body, "u/recognizesong") && !strings.Contains(body, "u/auddbot") {
@@ -402,6 +416,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		c <- true
 	}
 	footer := "\n\n" + strings.Join(links, " | ")
+
+	if strings.HasSuffix(resultUrl, ".m3u8") {
+		fmt.Println("\nStream results:", result)
+	}
 	withLinks := (strings.Contains(body, "u/recognizesong") || replySettings[t + "Links"]) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	response := GetReply(result, withLinks)
@@ -430,11 +448,19 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 func (r *auddBot) Mention(p *reddit1.Message) error {
 	// Note: it looks like we don't get all the mentions through this
 	// In particular, we don't get mentions in replies to our comments
-	j, _ := json.Marshal(p)
-	fmt.Println("\n😻 Got a mention", string(j))
+	//j, _ := json.Marshal(p)
+	//fmt.Println("\n😻 Got a mention", string(j))
+	fmt.Println("\n😻 Got a mention", p.Body)
 	if !p.New {
 		fmt.Println("Not a new mention")
 		return nil
+	}
+	compare := strings.ToLower(p.Body)
+	for i := range antiTriggers {
+		if strings.Contains(compare, antiTriggers[i]) {
+			fmt.Println("Got an anti-trigger", p.Body)
+			return nil
+		}
 	}
 	go func() {
 		capture(r.r.ReadMessage(p.Name))
@@ -458,8 +484,14 @@ func (r *auddBot) Comment(p *models.Comment) {
 	if !trigger {
 		return
 	}
-	j, _ := json.Marshal(p)
-	fmt.Println("\n😻 Got a comment", "https://reddit.com"+p.Permalink, string(j))
+	for i := range antiTriggers {
+		if strings.Contains(compare, antiTriggers[i]) {
+			fmt.Println("Got an anti-trigger", p.Body, "https://reddit.com"+p.Permalink)
+			return
+		}
+	}
+	//j, _ := json.Marshal(p)
+	fmt.Println("\n😻 Got a comment", "https://reddit.com"+p.Permalink, p.Body)
 	r.HandleQuery(nil, p, nil)
 	return
 }
@@ -787,15 +819,7 @@ type RedditStreamJSON struct {
 		Stream    struct {
 			StreamID      string      `json:"stream_id"`
 			HlsURL        string      `json:"hls_url"`
-			PublishAt     int64       `json:"publish_at"`
-			HlsExistsAt   int64       `json:"hls_exists_at"`
-			Thumbnail     string      `json:"thumbnail"`
-			Width         int         `json:"width"`
-			Height        int         `json:"height"`
-			UpdateAt      int64       `json:"update_at"`
 			State         string      `json:"state"`
-			DurationLimit int         `json:"duration_limit"`
-			VodAccessible bool        `json:"vod_accessible"`
 		} `json:"stream"`
 	} `json:"data"`
 }
