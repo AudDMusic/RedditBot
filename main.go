@@ -197,6 +197,12 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 	if strings.Contains(resultUrl, "https://v.redd.it/") {
 		resultUrl += "/DASH_audio.mp4"
 	}
+	if strings.Contains(resultUrl, "https://reddit.com/link/") && strings.Contains(resultUrl, "/video/") {
+		s := strings.TrimSuffix(resultUrl, "/")
+		s = strings.ReplaceAll(s, "/player", "")
+		s_ := strings.Split(s, "/")
+		resultUrl = s_[len(s_)-1]
+	}
 	if strings.Contains(resultUrl, "https://reddit.com/link/") {
 		capture(fmt.Errorf("got an unparsed URL, %s", resultUrl))
 	}
@@ -502,9 +508,7 @@ func replaceSlice(s, new string, oldStrings ...string) string {
 	return s
 }
 func getBodyToCompare(body string) string {
-	body = strings.ToLower(body)
-	body = replaceSlice(body, "", "'", "’", "`")
-	return body
+	return strings.ToLower(replaceSlice(body, "", "'", "’", "`"))
 }
 
 func (r *auddBot) Comment(p *models.Comment) {
