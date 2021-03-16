@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -41,8 +42,8 @@ var replySettings = map[string]bool{
 	"postReplyAlways": false,
 }
 
-var commentsCounter uint64 = 0
-var postsCounter uint64 = 0
+var commentsCounter int64 = 0
+var postsCounter int64 = 0
 
 var markdownRegex = regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
 var rxStrict = xurls.Strict()
@@ -82,7 +83,7 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 	if post != nil {
 		resultUrl = post.URL
 	}
-	/*if strings.Contains(resultUrl, "reddit.com/rpan") {
+	if strings.Contains(resultUrl, "reddit.com/rpan") {
 		s := strings.Split(resultUrl, "/")
 		jsonUrl := "https://strapi.reddit.com/videos/t3_" + s[len(s)-1]
 		var page RedditStreamJSON
@@ -95,7 +96,7 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 			return "", fmt.Errorf("got an empty URL of the live stream HLS")
 		}
 		return resultUrl, nil
-	}*/
+	}
 	if len(commentsTree) > 0 {
 		if commentsTree[0] != nil {
 			if resultUrl == "" {
@@ -217,21 +218,24 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 		parent, err := r.r.SubmissionInfoID(parentId)
 		//r.bot.Listing(parentId, )
 		j, _ := json.Marshal(parent)
-		fmt.Println("parent:", string(j))
-		//parentId = ""
-		if err != nil {
+		fmt.Printf("parent [%s]: %s\n", string(parentId), string(j))
+		if err != nil && err.Error() != "no results" {
 			return "", err
 		}
-		if p, ok := parent.(*models.Post); ok {
-			post = p
-			break
-		}
-		if c, ok := parent.(*models.Comment); ok {
-			commentsTree = append(commentsTree, c)
-			parentId = c.ParentID
+		if err == nil {
+			if p, ok := parent.(*models.Post); ok {
+				post = p
+				break
+			}
+			if c, ok := parent.(*models.Comment); ok {
+				commentsTree = append(commentsTree, c)
+				parentId = c.ParentID
+			} else {
+				return "", fmt.Errorf("got a result that's neither a post nor a comment, parent ID %s, %v",
+					parentId, parent)
+			}
 		} else {
-			return "", fmt.Errorf("got a result that's neither a post nor a comment, parent ID %s, %v",
-				parentId, parent)
+			parentId = ""
 		}
 	}
 	// ToDo: find out why Reddit sometimes doesn't give us the post and fix
@@ -319,11 +323,15 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 	return response
 }
 
+var locker = map[string]chan bool{}
+var lockerMu = &sync.Mutex{}
+
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
 	var resultUrl, t, parentID, body string
 	var err error
 	if mention != nil {
 		t, parentID, body = "mention", mention.Name, mention.Body
+		fmt.Println("\n ! Processing the mention")
 	}
 	if comment != nil {
 		t, parentID, body = "comment", string(comment.GetID()), comment.Body
@@ -337,10 +345,26 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if capture(err) {
 		return
 	}
+	c := make(chan bool, 1)
+	lockerMu.Lock()
+	if c, exists := locker[parentID]; exists {
+		delete(locker, parentID)
+		lockerMu.Unlock()
+		results := <-c
+		if results {
+			fmt.Println("Ignored a duplicate")
+			return
+		}
+		fmt.Println("Attempting to recognize the song again")
+	} else {
+		locker[parentID] = c
+		lockerMu.Unlock()
+	}
 	body = strings.ToLower(body)
 	if strings.HasSuffix(resultUrl, ".m3u8") {
 		//ToDo: recognize music from live streams
-		fmt.Println("Got a livestream", resultUrl)
+		fmt.Println("\nGot a livestream", resultUrl)
+		c <- false
 		return
 	}
 	skip := GetSkipFromLink(resultUrl)
@@ -352,6 +376,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
 	if capture(err) {
+		c <- false
 		return
 	}
 	links := []string{
@@ -362,12 +387,19 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	donateLink := 1
 	if len(result) == 0 {
+		if strings.Contains(resultUrl, "https://www.reddit.com/") {
+			c <- false
+		} else {
+			c <- true
+		}
 		if !replySettings[t + "ReplyAlways"] &&
 			!strings.Contains(body, "u/recognizesong") && !strings.Contains(body, "u/auddbot") {
 			fmt.Println("No result")
 			return
 		}
-		links = append(links[:donateLink], links[donateLink:]...)
+		links = append(links[:donateLink], links[donateLink+1:]...)
+	} else {
+		c <- true
 	}
 	footer := "\n\n" + strings.Join(links, " | ")
 	withLinks := (strings.Contains(body, "u/recognizesong") || replySettings[t + "Links"]) &&
@@ -387,7 +419,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		response += footer
 	}
 	fmt.Println(response)
-	if strings.Contains(body, "u/recognizeSong") {
+	if strings.Contains(body, "u/recognizesong") {
 		_, err = r.r.ReplyWithID(parentID, response)
 	} else {
 		_, err = r.r2.ReplyWithID(parentID, response)
@@ -396,22 +428,24 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 }
 
 func (r *auddBot) Mention(p *reddit1.Message) error {
-	// ToDo: find out why we don't get all the mentions
-	// (e.g., https://www.reddit.com/r/NameThatSong/comments/m5l84h/chirptuneish_something_that_would_be_in_mo3/gr0jpc2/?utm_source=reddit&utm_medium=web2x&context=3)
-	// Possibly, we don't get replies to our previous comments?
+	// Note: it looks like we don't get all the mentions through this
+	// In particular, we don't get mentions in replies to our comments
 	j, _ := json.Marshal(p)
-	fmt.Println("Got a mention", string(j))
+	fmt.Println("\n😻 Got a mention", string(j))
 	if !p.New {
+		fmt.Println("Not a new mention")
 		return nil
 	}
-	capture(r.r.ReadMessage(p.Name))
+	go func() {
+		capture(r.r.ReadMessage(p.Name))
+	}()
 	r.HandleQuery(p, nil, nil)
 	return nil
 }
 
 func (r *auddBot) Comment(p *models.Comment) {
 	//fmt.Print("c") // why? to test the amount of new comments on Reddit!
-	atomic.AddUint64(&commentsCounter, 1)
+	atomic.AddInt64(&commentsCounter, 1)
 	//return nil
 	compare := strings.ToLower(p.Body)
 	trigger := false
@@ -425,13 +459,13 @@ func (r *auddBot) Comment(p *models.Comment) {
 		return
 	}
 	j, _ := json.Marshal(p)
-	fmt.Println("Got a comment", string(j))
+	fmt.Println("\n😻 Got a comment", "https://reddit.com"+p.Permalink, string(j))
 	r.HandleQuery(nil, p, nil)
 	return
 }
 
 func (r *auddBot) Post(p *models.Post)  {
-	atomic.AddUint64(&postsCounter, 1)
+	atomic.AddInt64(&postsCounter, 1)
 	compare := strings.ToLower(p.Selftext)
 	trigger := false
 	for i := range triggers {
@@ -451,7 +485,7 @@ func (r *auddBot) Post(p *models.Post)  {
 		return
 	}
 	j, _ := json.Marshal(p)
-	fmt.Println("Got a post", string(j))
+	fmt.Println("\n😻 Got a post", "https://reddit.com"+p.Permalink, string(j))
 	r.HandleQuery(nil, nil, p)
 	return
 }
@@ -515,7 +549,10 @@ func getReddit1Credentials(filename string) reddit1.Bot {
 func main() {
 	go func() {
 		for {
-			fmt.Println("Comments:", atomic.LoadUint64(&commentsCounter), "posts:", atomic.LoadUint64(&postsCounter))
+			newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
+			fmt.Println("Comments:", newComments, "posts:", newPosts)
+			atomic.AddInt64(&commentsCounter, -1 * newComments)
+			atomic.AddInt64(&postsCounter, -1 * newPosts)
 			<- time.NewTicker(time.Minute).C
 		}
 	}()
@@ -551,7 +588,7 @@ func main() {
 				fmt.Println("Stream was closed")
 				return
 			}
-			go atomic.AddUint64(&postsCounter, 1)
+			//go atomic.AddUint64(&postsCounter, 1)
 			p = s.(*models.Post)
 			go handler.Post(p)
 		}
@@ -564,7 +601,7 @@ func main() {
 				fmt.Println("Stream was closed")
 				return
 			}
-			go atomic.AddUint64(&commentsCounter, 1)
+			//go atomic.AddUint64(&commentsCounter, 1)
 			c = s.(*models.Comment)
 			go handler.Comment(c)
 		}
@@ -598,8 +635,8 @@ func streamSubredditPosts(c *mira.Reddit, name string) (*mira.SubmissionStream, 
 				close(sendC)
 				return
 			}
-			if len(posts) > 90 {
-				fmt.Printf("got %d new posts", len(posts))
+			if len(posts) > 95 {
+				//fmt.Printf("%d new posts | ", len(posts))
 			}
 			for i := len(posts) - 1; i >= 0; i-- {
 				if ringContains(sent, posts[i].GetID()) {
@@ -646,8 +683,8 @@ func streamSubredditComments(c *mira.Reddit, name string) (*mira.SubmissionStrea
 				close(sendC)
 				return
 			}
-			if len(comments) > 90 {
-				fmt.Printf("got %d new comments", len(comments))
+			if len(comments) > 95 {
+				//fmt.Printf("%d new comments | ", len(comments))
 			}
 			for i := len(comments) - 1; i >= 0; i-- {
 				if ringContains(sent, comments[i].GetID()) {
@@ -745,7 +782,7 @@ type RedditPageJSON []struct {
 	} `json:"data"`
 }
 
-/*type RedditStreamJSON struct {
+type RedditStreamJSON struct {
 	Data          struct {
 		Stream    struct {
 			StreamID      string      `json:"stream_id"`
@@ -761,4 +798,4 @@ type RedditPageJSON []struct {
 			VodAccessible bool        `json:"vod_accessible"`
 		} `json:"stream"`
 	} `json:"data"`
-}*/
+}
