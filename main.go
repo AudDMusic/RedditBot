@@ -8,12 +8,14 @@ import (
 	"github.com/AudDMusic/audd-go"
 	"github.com/getsentry/raven-go"
 	"github.com/golang/protobuf/proto"
+	"github.com/surajJha/go-profanity-hindi"
 	"github.com/ttgmpsn/mira"
 	"github.com/ttgmpsn/mira/models"
 	"github.com/turnage/graw"
 	reddit1 "github.com/turnage/graw/reddit"
 	"github.com/turnage/redditproto"
 	"io/ioutil"
+	"math"
 	"mvdan.cc/xurls/v2"
 	"net/http"
 	"net/url"
@@ -34,7 +36,8 @@ var triggers = []string{"whats the song", "what is the song", "whats this song",
 	"whats the music", "what is the music", "whats this music", "what is this music",
 	"whats the track in this", "what is the track in this",
 	"recognizesong", "auddbot", "u/find-song"}
-var antiTriggers = []string{"has been automatically removed", "your comment was removed"}
+var antiTriggers = []string{"has been automatically removed", "your comment was removed",
+	"comment here with such low karma", "bot wants to find the best and worst bots"}
 
 var replySettings = map[string]bool{
 	"mentionLinks": true,
@@ -312,16 +315,16 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 			album := ""
 			label := ""
 			if song.Title != song.Album && song.Album != "" {
-				album = "Album: ^(" + song.Album + "). "
+				album = "Album: `" + song.Album + "`. "
 			}
 			if song.Artist != song.Label && song.Label != "Self-released"  && song.Label != "" {
-				label = " by ^(" + song.Label + ")"
+				label = " by `" + song.Label + "`"
 			}
 			score := strconv.Itoa(song.Score) + "%"
-			text := fmt.Sprintf("[**%s** by %s](%s) (%s; confidence: ^(%s)))\n\n%sReleased on ^(%s)%s.",
+			text := fmt.Sprintf("[**%s** by %s](%s) (%s; matched: `%s`)\n\n%sReleased on `%s`%s.",
 				song.Title, song.Artist, song.SongLink, song.Timecode, score, album, song.ReleaseDate, label)
 			if !withLinks {
-				text = fmt.Sprintf("**%s** by %s (%s; confidence: ^(%s)))\n\n%sReleased on ^(%s)%s.",
+				text = fmt.Sprintf("**%s** by %s (%s; matched: `%s`)\n\n%sReleased on `%s`%s.",
 					song.Title, song.Artist, song.Timecode, score, album, song.ReleaseDate, label)
 			}
 			texts = append(texts, text)
@@ -332,11 +335,12 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks bool) string 
 	}
 	response := texts[0]
 	if len(texts) > 1 {
-		response = "Recognized multiple songs:"
+		response = "I got matches with these songs:"
 		for i, text := range texts {
 			response += fmt.Sprintf("\n\n%d. %s", i+1, text)
 		}
 	}
+	response = profanity.MaskProfanity(response, "#")
 	return response
 }
 
@@ -347,6 +351,9 @@ type d struct{
 
 var avoidDuplicates = map[string]chan d{}
 var avoidDuplicatesMu = &sync.Mutex{}
+
+var myReplies = map[models.RedditID]bool{}
+var myRepliesMu = &sync.Mutex{}
 
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
 	var resultUrl, t, parentID, body string
@@ -404,11 +411,22 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		limit = 3
 	}
 	body = strings.ToLower(body)
+	rs :=  strings.Contains(body, "u/recognizesong")
+	summoned := rs || strings.Contains(body, "u/auddbot")
 	if strings.HasSuffix(resultUrl, ".m3u8") {
 		fmt.Println("\nGot a livestream", resultUrl)
+		if summoned {
+			reply := "I'll listen to the next 18 seconds of the stream and try to identify the song"
+			if rs {
+				go r.r.ReplyWithID(parentID, reply)
+
+			} else {
+				go r.r2.ReplyWithID(parentID, reply)
+			}
+		}
 		limit = 1
 	}
-	withLinks := (strings.Contains(body, "u/recognizesong") || replySettings[t + "Links"]) &&
+	withLinks := (summoned || replySettings[t + "Links"]) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets":"true", "skip":strconv.Itoa(skip), "limit":strconv.Itoa(limit)})
@@ -429,7 +447,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
 		"[Donate](https://www.patreon.com/audd)",
-		"[Feedback](https://www.reddit.com/message/compose?to=Mihonarium&subject=Music%20recognition)",
+		"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition)",
 	}
 	donateLink := 1
 	if len(result) == 0 {
@@ -442,14 +460,16 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		} else {
 			c <- d{false, resultUrl}
 		}
-		if !replySettings[t + "ReplyAlways"] &&
-			!strings.Contains(body, "u/recognizesong") && !strings.Contains(body, "u/auddbot") {
+		if !replySettings[t + "ReplyAlways"] &&	!summoned {
 			fmt.Println("No result")
 			return
 		}
-		footerLinks = append(footerLinks[:donateLink], footerLinks[donateLink+1:]...)
 	} else {
 		c <- d{true, resultUrl}
+	}
+	//if len(result) == 0 || !summoned {
+	if len(result) == 0 || !summoned {
+		footerLinks = append(footerLinks[:donateLink], footerLinks[donateLink+1:]...)
 	}
 	footer := "\n\n" + strings.Join(footerLinks, " | ")
 
@@ -470,12 +490,19 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		response += footer
 	}
 	fmt.Println(response)
-	if strings.Contains(body, "u/recognizesong") {
-		_, err = r.r.ReplyWithID(parentID, response)
+	var cr *models.CommentActionResponse
+	if rs {
+		cr, err = r.r.ReplyWithID(parentID, response)
 	} else {
-		_, err = r.r2.ReplyWithID(parentID, response)
+		cr, err = r.r2.ReplyWithID(parentID, response)
 	}
-	capture(err)
+	if !capture(err) {
+		if len(cr.JSON.Data.Things) > 0 {
+			myRepliesMu.Lock()
+			myReplies[cr.JSON.Data.Things[0].Data.GetID()] = summoned
+			myRepliesMu.Unlock()
+		}
+	}
 }
 
 func (r *auddBot) Mention(p *reddit1.Message) error {
@@ -511,6 +538,33 @@ func getBodyToCompare(body string) string {
 	return strings.ToLower(replaceSlice(body, "", "'", "’", "`"))
 }
 
+func distance(s, sub1, sub2 string) (int, bool){
+	i1 := strings.Index(s, sub1)
+	i2 := strings.Index(s, sub2)
+	if i1 == -1 || i2 == -1 {
+		return 0, false
+	}
+	return i2 - i1, true
+}
+
+func minDistance(s, sub1 string, sub2 ...string) int {
+	if !strings.Contains(s, sub1) {
+		return 0
+	}
+
+	min := math.MaxInt16
+	for i := range sub2 {
+		d, e := distance(s, sub1, sub2[i])
+		if e && d < min {
+			min = d
+		}
+	}
+	if min == math.MaxInt16 {
+		min = 0
+	}
+	return min
+}
+
 func (r *auddBot) Comment(p *models.Comment) {
 	//fmt.Print("c") // why? to test the amount of new comments on Reddit!
 	atomic.AddInt64(&commentsCounter, 1)
@@ -523,7 +577,25 @@ func (r *auddBot) Comment(p *models.Comment) {
 			break
 		}
 	}
+	if strings.Contains(compare, "bad bot") {
+		myRepliesMu.Lock()
+		summoned, exists := myReplies[p.ParentID]
+		myRepliesMu.Unlock()
+		if exists && !summoned {
+			target := mira.RedditOauth + "/api/del"
+			_, err := r.r2.MiraRequest("POST", target, map[string]string{
+				"id":       string(p.ParentID),
+				"api_type": "json",
+			})
+			fmt.Println("got a bad bot comment", "https://reddit.com"+p.Permalink)
+			capture(err)
+		}
+	}
 	if !trigger {
+		d := minDistance(compare, "what", "song","music","track")
+		if len(compare) < 100 && d != 0 && d < 10 {
+			fmt.Println("Skipping comment:", compare, "https://reddit.com"+p.Permalink)
+		}
 		return
 	}
 	for i := range antiTriggers {
@@ -621,15 +693,6 @@ func getReddit1Credentials(filename string) reddit1.Bot {
 }
 
 func main() {
-	go func() {
-		for {
-			newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
-			fmt.Println("Comments:", newComments, "posts:", newPosts)
-			atomic.AddInt64(&commentsCounter, -1 * newComments)
-			atomic.AddInt64(&postsCounter, -1 * newPosts)
-			<- time.NewTicker(time.Minute).C
-		}
-	}()
 	//client.Stream.Posts("")
 
 	handler := &auddBot{
@@ -638,6 +701,19 @@ func main() {
 		r: getReddit2Credentials("RecognizeSong.agent"),
 		r2: getReddit2Credentials("auddbot.agent"),
 	}
+	go func() {
+		t := time.NewTicker(time.Minute)
+		for {
+			<- t.C
+			newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
+			fmt.Println("Comments:", newComments, "posts:", newPosts)
+			atomic.AddInt64(&commentsCounter, -1 * newComments)
+			atomic.AddInt64(&postsCounter, -1 * newPosts)
+			if newComments == 0 {
+				handler.r2 = getReddit2Credentials("auddbot.agent")
+			}
+		}
+	}()
 	handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint) // See https://docs.audd.io/enterprise
 
 	cfg := graw.Config{Mentions: true}
