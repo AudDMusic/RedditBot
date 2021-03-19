@@ -38,6 +38,9 @@ var triggers = []string{"whats the song", "what is the song", "whats this song",
 	"recognizesong", "auddbot", "u/find-song"}
 var antiTriggers = []string{"has been automatically removed", "your comment was removed",
 	"comment here with such low karma", "bot wants to find the best and worst bots"}
+var ignoreSubreddits = []string{
+	"wallstreetbets", //45 days account age threshold
+}
 
 var replySettings = map[string]bool{
 	"mentionLinks": true,
@@ -263,7 +266,14 @@ func GetSkipFromLink(resultUrl string) int {
 	}
 	u, err := url.Parse(resultUrl)
 	if err == nil {
-		if t := u.Query().Get("t"); t != "" {
+		t := u.Query().Get("t")
+		if t == "" {
+			t = u.Query().Get("time_continue") // Thanks to mike-fmh for the idea of "start" and "time_continue"
+			if t == "" {
+				t = u.Query().Get("start")
+			}
+		}
+		if t != "" {
 			t = strings.ReplaceAll(t, "s", "")
 			tInt := 0
 			if strings.Contains(t, "m") {
@@ -524,6 +534,7 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 	}
 	go func() {
 		capture(r.r.ReadMessage(p.Name))
+		capture(r.r.ReadMessage(p.ID))
 	}()
 	r.HandleQuery(p, nil, nil)
 	return nil
@@ -597,6 +608,12 @@ func (r *auddBot) Comment(p *models.Comment) {
 			fmt.Println("Skipping comment:", compare, "https://reddit.com"+p.Permalink)
 		}
 		return
+	}
+	for i := range ignoreSubreddits {
+		if p.Subreddit == ignoreSubreddits[i] {
+			fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
+			return
+		}
 	}
 	for i := range antiTriggers {
 		if strings.Contains(compare, antiTriggers[i]) {
@@ -693,72 +710,93 @@ func getReddit1Credentials(filename string) reddit1.Bot {
 }
 
 func main() {
-	//client.Stream.Posts("")
-
-	handler := &auddBot{
-		bot: getReddit1Credentials("RecognizeSong.agent"),
-		audd: audd.NewClient(auddToken),
-		r: getReddit2Credentials("RecognizeSong.agent"),
-		r2: getReddit2Credentials("auddbot.agent"),
-	}
-	go func() {
-		t := time.NewTicker(time.Minute)
-		for {
-			<- t.C
-			newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
-			fmt.Println("Comments:", newComments, "posts:", newPosts)
-			atomic.AddInt64(&commentsCounter, -1 * newComments)
-			atomic.AddInt64(&postsCounter, -1 * newPosts)
-			if newComments == 0 {
-				handler.r2 = getReddit2Credentials("auddbot.agent")
-			}
+	for {
+		handler := &auddBot{
+			bot: getReddit1Credentials("RecognizeSong.agent"),
+			audd: audd.NewClient(auddToken),
+			r: getReddit2Credentials("RecognizeSong.agent"),
+			r2: getReddit2Credentials("auddbot.agent"),
 		}
-	}()
-	handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint) // See https://docs.audd.io/enterprise
-
-	cfg := graw.Config{Mentions: true}
-	_, wait, err := graw.Run(handler, handler.bot, cfg)
-	if capture(err) {
-		panic(err)
-	}
-
-	postsStream, err := streamSubredditPosts(handler.r2,"all")
-	if err != nil {
-		panic(err)
-	}
-	commentsStream, err := streamSubredditComments(handler.r2, "all")
-	if err != nil {
-		panic(err)
-	}
-	go func() {
-		var s models.Submission
-		var p *models.Post
-		for s = range postsStream.C {
-			if s == nil {
-				fmt.Println("Stream was closed")
-				return
+		stop := make(chan struct{}, 1)
+		go func() {
+			t := time.NewTicker(time.Minute)
+			for {
+				select {
+				case <- stop:
+					return
+				default:
+				}
+				<- t.C
+				newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
+				fmt.Println("Comments:", newComments, "posts:", newPosts)
+				atomic.AddInt64(&commentsCounter, -1 * newComments)
+				atomic.AddInt64(&postsCounter, -1 * newPosts)
+				if newComments == 0 {
+					handler.r2 = getReddit2Credentials("auddbot.agent")
+				}
 			}
-			//go atomic.AddUint64(&postsCounter, 1)
-			p = s.(*models.Post)
-			go handler.Post(p)
+		}()
+		handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint) // See https://docs.audd.io/enterprise
+		/*_, err := handler.r.ListUnreadMessages()
+		if capture(err) {
+			panic(err)
 		}
-	}()
-	go func() {
-		var s models.Submission
-		for s = range commentsStream.C {
-			var c *models.Comment
-			if s == nil {
-				fmt.Println("Stream was closed")
-				return
+		for i := range m {
+			//go handler.Comment(m[i])
+			fmt.Println(m[i].Permalink)
+			capture(handler.r.ReadMessage(m[i].ID))
+		}*/
+		cfg := graw.Config{Mentions: true}
+		_, wait, err := graw.Run(handler, handler.bot, cfg)
+		if capture(err) {
+			panic(err)
+		}
+		//ToDo: also get inbox messages to avoid not replying to mentions
+
+		postsStream, err := streamSubredditPosts(handler.r2,"all")
+		if err != nil {
+			panic(err)
+		}
+		commentsStream, err := streamSubredditComments(handler.r2, "all")
+		if err != nil {
+			panic(err)
+		}
+		go func() {
+			var s models.Submission
+			var p *models.Post
+			for s = range postsStream.C {
+				if s == nil {
+					fmt.Println("Stream was closed")
+					return
+				}
+				//go atomic.AddUint64(&postsCounter, 1)
+				p = s.(*models.Post)
+				go handler.Post(p)
 			}
-			//go atomic.AddUint64(&commentsCounter, 1)
-			c = s.(*models.Comment)
-			go handler.Comment(c)
-		}
-	}()
-	capture(err)
-	fmt.Println("started")
-	fmt.Println("graw run failed: ", wait())
+		}()
+		go func() {
+			var s models.Submission
+			for s = range commentsStream.C {
+				var c *models.Comment
+				if s == nil {
+					fmt.Println("Stream was closed")
+					return
+				}
+				//go atomic.AddUint64(&commentsCounter, 1)
+				c = s.(*models.Comment)
+				go handler.Comment(c)
+			}
+		}()
+		capture(err)
+		fmt.Println("started")
+		fmt.Println("graw run failed: ", wait())
+		go func() {
+			commentsStream.Close <- struct{}{}
+			postsStream.Close <- struct{}{}
+			stop <- struct{}{}
+		}()
+	}
+
 }
 
 func streamSubredditPosts(c *mira.Reddit, name string) (*mira.SubmissionStream, error) {
@@ -777,6 +815,7 @@ func streamSubredditPosts(c *mira.Reddit, name string) (*mira.SubmissionStream, 
 		for {
 			select {
 			case <-s.Close:
+				close(sendC)
 				return
 			default:
 			}
@@ -825,6 +864,7 @@ func streamSubredditComments(c *mira.Reddit, name string) (*mira.SubmissionStrea
 		for {
 			select {
 			case <-s.Close:
+				close(sendC)
 				return
 			default:
 			}
