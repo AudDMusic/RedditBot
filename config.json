@@ -1,0 +1,26 @@
+{
+  "AudDToken": "test",
+  "Triggers": [
+    "whats the song", "what is the song", "whats this song", "what is this song", 
+    "what song is this", "what song is playing", "what track is this"
+  ],
+  "AntiTriggers": [
+    "has been automatically removed", "your comment was removed",
+    "comment here with such low karma", "bot wants to find the best and worst bots"
+  ],
+  "ReplySettings": {
+    "Mention": {
+      "SendLinks": true,
+      "ReplyAlways": true
+    },
+    "Comment": {
+      "SendLinks": true,
+      "ReplyAlways": false
+    },
+    "Post": {
+      "SendLinks": true,
+      "ReplyAlways": false
+    }
+  },
+  "RavenDSN": ""
+}
