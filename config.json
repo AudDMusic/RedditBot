@@ -9,15 +9,15 @@
     "comment here with such low karma", "bot wants to find the best and worst bots"
   ],
   "ReplySettings": {
-    "Mention": {
+    "mention": {
       "SendLinks": true,
       "ReplyAlways": true
     },
-    "Comment": {
+    "comment": {
       "SendLinks": true,
       "ReplyAlways": false
     },
-    "Post": {
+    "post": {
       "SendLinks": true,
       "ReplyAlways": false
     }
