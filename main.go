@@ -53,23 +53,25 @@ var ignoreSubreddits = []string{
 
 	"LatinoPeopleTwitter", // deletes all comments
 
-	"deadbydaylight",       // banned by BotDefense, won't unban
-	"MadeMeSmile",          // banned by BotDefense, won't unban
-	"unrealengine",         // banned by BotDefense, won't unban unless there's a bot-specific summoning
-	"dataisbeautiful",      // banned by BotDefense, won't unban
-	"aww",                  // banned by BotDefense
-	"southafrica",          // banned by BotDefense
-	"UberEATS",             // banned by BotDefense
-	"trees",                // banned by BotDefense
-	"BisexualTeens",        // banned by BotDefense
-	"PewdiepieSubmissions", // banned by BotDefense
+	// subreddits where BotDefense banned the bot
+	"deadbydaylight",       // won't unban
+	"MadeMeSmile",          // won't unban
+	"unrealengine",         // won't unban unless there's a bot-specific summoning
+	"dataisbeautiful",      // won't unban
+	"aww",                  // 
+	"southafrica",          // 
+	"UberEATS",             // 
+	"trees",                // 
+	"BisexualTeens",        // 
+	"PewdiepieSubmissions", // 
 }
 
-var unbannedOn = []string{
-	"okbuddyretard",    // banned by BotDefense, but unbanned after I contacted them
-	"nextfuckinglevel", // banned by BotDefense, but unbanned after I contacted them
-	"jacksepticeye",    // banned by BotDefense, but unbanned after I contacted them
-	"MinecraftMemes",   // banned by BotDefense, but unbanned after I contacted them
+var approvedOn = []string{
+	// subreddits where BotDefense banned the bot, but the mods unbanned it after I contacted them
+	"okbuddyretard",    
+	"nextfuckinglevel", 
+	"jacksepticeye",    
+	"MinecraftMemes",  
 }
 
 type BotConfig struct {
@@ -246,22 +248,6 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 				}
 			}
 		}
-	}
-	if strings.Contains(resultUrl, "vocaroo.com/") || strings.Contains(resultUrl, "https://voca.ro/") {
-		s := strings.Split(resultUrl, "/")
-		resultUrl = "https://media1.vocaroo.com/mp3/" + s[len(s)-1]
-	}
-	if strings.Contains(resultUrl, "https://v.redd.it/") {
-		resultUrl += "/DASH_audio.mp4"
-	}
-	if strings.Contains(resultUrl, "https://reddit.com/link/") && strings.Contains(resultUrl, "/video/") {
-		s := strings.TrimSuffix(resultUrl, "/")
-		s = strings.ReplaceAll(s, "/player", "")
-		s_ := strings.Split(s, "/")
-		resultUrl = "https://v.redd.it/" + s_[len(s_)-1] + "/DASH_audio.mp4"
-	}
-	if strings.Contains(resultUrl, "https://reddit.com/link/") {
-		capture(fmt.Errorf("got an unparsed URL, %s", resultUrl))
 	}
 	// ToDo: parse the the body and check if there's a timestamp; add it to the t URL parameter
 	// (maybe, only when there's no t parameter in the url?)
@@ -501,8 +487,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 		limit = 1
 	}
-	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(unbannedOn, subreddit)) &&
+	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(approvedOn, subreddit)) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
+	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "skip": strconv.Itoa(skip), "limit": strconv.Itoa(limit)})
 	response := GetReply(result, withLinks, true)
