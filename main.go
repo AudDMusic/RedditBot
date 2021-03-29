@@ -36,10 +36,11 @@ var ignoreSubreddits = []string{
 	"depression",
 
 	// subreddits with account age thresholds
-	"wallstreetbets", // 45 days
-	"dogelore",       // 21 days
-	"fightporn",      // 14 days
-	"Hololive",      // unknown
+	"wallstreetbets",        // 45 days
+	"dogelore",              // 21 days
+	"Destiny",               // 20 days
+	"Hololive",              // unknown
+	"ihaveihaveihavereddit", // unknown
 
 	// subreddits that banned the bot
 	"tiktokthots",        // banned
@@ -47,28 +48,65 @@ var ignoreSubreddits = []string{
 	"GraceBoorBoutineLA", // banned
 	"Minecraft",          // banned
 	"anime",              // banned
+	"BackshotsOnly",      // banned
+	"TheArtistStudio",    // banned
 
-	// subreddits I decided the bot should avoid
-	"MAAU", // homophobic slurs about the bot's avatar (and I didn't know that's a thing on Reddit!)
+	"LatinoPeopleTwitter", // deletes all comments
+
+	"deadbydaylight",       // banned by BotDefense, won't unban
+	"MadeMeSmile",          // banned by BotDefense, won't unban
+	"unrealengine",         // banned by BotDefense, won't unban unless there's a bot-specific summoning
+	"dataisbeautiful",      // banned by BotDefense, won't unban
+	"aww",                  // banned by BotDefense
+	"southafrica",          // banned by BotDefense
+	"UberEATS",             // banned by BotDefense
+	"trees",                // banned by BotDefense
+	"BisexualTeens",        // banned by BotDefense
+	"PewdiepieSubmissions", // banned by BotDefense
+}
+
+var unbannedOn = []string{
+	"okbuddyretard",    // banned by BotDefense, but unbanned after I contacted them
+	"nextfuckinglevel", // banned by BotDefense, but unbanned after I contacted them
+	"jacksepticeye",    // banned by BotDefense, but unbanned after I contacted them
+	"MinecraftMemes",   // banned by BotDefense, but unbanned after I contacted them
 }
 
 type BotConfig struct {
-	AudDToken     string      `json:"AudDToken"`
-	Triggers      []string    `json:"Triggers"`
-	AntiTriggers  []string    `json:"AudDTAntiTriggers"`
-	ReplySettings map[string]ReplyConfig `json:"ReplySettings"`
-	RavenDSN      string      `json:"RavenDSN"`
+	AudDToken     string                 `required:"true" default:"test" usage:"the token from dashboard.audd.io" json:"AudDToken"`
+	Triggers      []string               `usage:"phrases bot will react to" json:"Triggers"`
+	AntiTriggers  []string               `usage:"phrases bot will avoid replying to" json:"AudDTAntiTriggers"`
+	ReplySettings map[string]ReplyConfig `required:"true" json:"ReplySettings"`
+	RavenDSN      string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
 }
 
 type ReplyConfig struct {
-	SendLinks bool `json:"SendLinks"`
-	ReplyAlways bool `json:"ReplyAlways"`
+	SendLinks   bool `required:"true" usage:"should bot share links in the first reply" json:"SendLinks"`
+	ReplyAlways bool `required:"true" usage:"will bot reply when hasn't recognized a song" json:"ReplyAlways"`
 }
+
 var commentsCounter int64 = 0
 var postsCounter int64 = 0
 
 var markdownRegex = regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
 var rxStrict = xurls.Strict()
+
+func stringInSlice(slice []string, s string) bool {
+	for i := range slice {
+		if s == slice[i] {
+			return true
+		}
+	}
+	return false
+}
+func substringInSlice(slice []string, s string) bool {
+	for i := range slice {
+		if strings.Contains(slice[i], s) {
+			return true
+		}
+	}
+	return false
+}
 
 func linksFromBody(body string) [][]string {
 	results := markdownRegex.FindAllStringSubmatch(body, -1)
@@ -382,21 +420,28 @@ type d struct {
 var avoidDuplicates = map[string]chan d{}
 var avoidDuplicatesMu = &sync.Mutex{}
 
-var myReplies = map[string]bool{}
+var myReplies = map[string]myComment{}
+
+type myComment struct {
+	summoned            bool
+	commentID           string
+	additionalCommentID string
+}
+
 var myRepliesMu = &sync.Mutex{}
 
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
-	var resultUrl, t, parentID, body string
+	var resultUrl, t, parentID, body, subreddit string
 	var err error
 	if mention != nil {
-		t, parentID, body = "mention", mention.Name, mention.Body
+		t, parentID, body, subreddit = "mention", mention.Name, mention.Body, mention.Subreddit
 		fmt.Println("\n ! Processing the mention")
 	}
 	if comment != nil {
-		t, parentID, body = "comment", string(comment.GetID()), comment.Body
+		t, parentID, body, subreddit = "comment", string(comment.GetID()), comment.Body, comment.Subreddit
 	}
 	if post != nil {
-		t, parentID, body = "post", string(post.GetID()), post.Selftext
+		t, parentID, body, subreddit = "post", string(post.GetID()), post.Selftext, post.Subreddit
 	}
 
 	// Avoid handling of both the comment from r/all and the mention
@@ -456,7 +501,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 		limit = 1
 	}
-	withLinks := (summoned || r.config.ReplySettings[t].SendLinks) &&
+	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(unbannedOn, subreddit)) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "skip": strconv.Itoa(skip), "limit": strconv.Itoa(limit)})
@@ -530,9 +575,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if !capture(err) {
 		if len(cr.JSON.Data.Things) > 0 {
 			sentID := string(cr.JSON.Data.Things[0].Data.GetID())
-			myRepliesMu.Lock()
-			myReplies[sentID] = summoned
-			myRepliesMu.Unlock()
+			comment := myComment{
+				summoned:  summoned,
+				commentID: sentID,
+			}
 			if !withLinks {
 				response = "Links to the streaming platforms:\n\n"
 				response += GetReply(result, true, false)
@@ -542,7 +588,19 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 				} else {
 					cr, err = r.r2.ReplyWithID(sentID, response)
 				}
+				if !capture(err) {
+					if len(cr.JSON.Data.Things) > 0 {
+						sentID := string(cr.JSON.Data.Things[0].Data.GetID())
+						comment.additionalCommentID = sentID
+						myRepliesMu.Lock()
+						myReplies[sentID] = comment
+						myRepliesMu.Unlock()
+					}
+				}
 			}
+			myRepliesMu.Lock()
+			myReplies[sentID] = comment
+			myRepliesMu.Unlock()
 		}
 	}
 }
@@ -558,11 +616,9 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		return nil
 	}
 	compare := getBodyToCompare(p.Body)
-	for i := range r.config.AntiTriggers {
-		if strings.Contains(compare, r.config.AntiTriggers[i]) {
-			fmt.Println("Got an anti-trigger", p.Body)
-			return nil
-		}
+	if substringInSlice(r.config.AntiTriggers, compare) {
+		fmt.Println("Got an anti-trigger", p.Body)
+		return nil
 	}
 	go func() {
 		capture(r.r.ReadMessage(p.Name))
@@ -613,27 +669,28 @@ func (r *auddBot) Comment(p *models.Comment) {
 	atomic.AddInt64(&commentsCounter, 1)
 	//return nil
 	compare := getBodyToCompare(p.Body)
-	trigger := false
-	for i := range r.config.Triggers {
-		if strings.Contains(compare, r.config.Triggers[i]) {
-			trigger = true
-			break
-		}
-	}
+	trigger := substringInSlice(r.config.Triggers, compare)
 	// ToDo: move to config
 	if strings.Contains(compare, "bad bot") || strings.Contains(compare, "damn bot") ||
 		strings.Contains(compare, "stupid bot") {
 		myRepliesMu.Lock()
-		summoned, exists := myReplies[string(p.ParentID)]
+		comment, exists := myReplies[string(p.ParentID)]
 		myRepliesMu.Unlock()
-		if exists && !summoned {
+		if exists && !comment.summoned {
 			target := mira.RedditOauth + "/api/del"
 			_, err := r.r2.MiraRequest("POST", target, map[string]string{
-				"id":       string(p.ParentID),
+				"id":       comment.commentID,
 				"api_type": "json",
 			})
-			fmt.Println("got a bad bot comment", "https://reddit.com"+p.Permalink)
 			capture(err)
+			if comment.additionalCommentID != "" {
+				_, err = r.r2.MiraRequest("POST", target, map[string]string{
+					"id":       comment.additionalCommentID,
+					"api_type": "json",
+				})
+			}
+			capture(err)
+			fmt.Println("got a bad bot comment", "https://reddit.com"+p.Permalink)
 		}
 	}
 	if !trigger {
@@ -643,17 +700,13 @@ func (r *auddBot) Comment(p *models.Comment) {
 		}
 		return
 	}
-	for i := range ignoreSubreddits {
-		if p.Subreddit == ignoreSubreddits[i] {
-			fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
-			return
-		}
+	if stringInSlice(ignoreSubreddits, p.Subreddit) {
+		fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
+		return
 	}
-	for i := range r.config.AntiTriggers {
-		if strings.Contains(compare, r.config.AntiTriggers[i]) {
-			fmt.Println("Got an anti-trigger", p.Body, "https://reddit.com"+p.Permalink)
-			return
-		}
+	if substringInSlice(r.config.AntiTriggers, compare) {
+		fmt.Println("Got an anti-trigger", p.Body, "https://reddit.com"+p.Permalink)
+		return
 	}
 	//j, _ := json.Marshal(p)
 	fmt.Println("\n😻 Got a comment", "https://reddit.com"+p.Permalink, p.Body)
@@ -664,20 +717,8 @@ func (r *auddBot) Comment(p *models.Comment) {
 func (r *auddBot) Post(p *models.Post) {
 	atomic.AddInt64(&postsCounter, 1)
 	compare := getBodyToCompare(p.Selftext)
-	trigger := false
-	for i := range r.config.Triggers {
-		if strings.Contains(compare, r.config.Triggers[i]) {
-			trigger = true
-			break
-		}
-	}
-	compare = strings.ToLower(p.Title)
-	for i := range r.config.Triggers {
-		if strings.Contains(compare, r.config.Triggers[i]) {
-			trigger = true
-			break
-		}
-	}
+	trigger := substringInSlice(r.config.Triggers, compare) ||
+		substringInSlice(r.config.Triggers, strings.ToLower(p.Title))
 	if !trigger {
 		return
 	}
@@ -689,10 +730,10 @@ func (r *auddBot) Post(p *models.Post) {
 
 type auddBot struct {
 	config BotConfig
-	bot  reddit1.Bot
-	audd *audd.Client
-	r    *mira.Reddit
-	r2   *mira.Reddit
+	bot    reddit1.Bot
+	audd   *audd.Client
+	r      *mira.Reddit
+	r2     *mira.Reddit
 }
 
 func getReddit2Credentials(filename string) *mira.Reddit {
@@ -776,10 +817,10 @@ func main() {
 	for {
 		handler := &auddBot{
 			config: *cfg,
-			bot:  getReddit1Credentials("RecognizeSong.agent"),
-			audd: audd.NewClient(cfg.AudDToken),
-			r:    getReddit2Credentials("RecognizeSong.agent"),
-			r2:   getReddit2Credentials("auddbot.agent"),
+			bot:    getReddit1Credentials("RecognizeSong.agent"),
+			audd:   audd.NewClient(cfg.AudDToken),
+			r:      getReddit2Credentials("RecognizeSong.agent"),
+			r2:     getReddit2Credentials("auddbot.agent"),
 		}
 		if handler.bot == nil || handler.r == nil || handler.r2 == nil {
 			time.Sleep(time.Second * 10)
