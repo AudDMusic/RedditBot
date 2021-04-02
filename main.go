@@ -37,6 +37,7 @@ var ignoreSubreddits = []string{
 
 	// subreddits with account age thresholds
 	"wallstreetbets",        // 45 days
+	"NormalDayInArabia",     // 30 days
 	"dogelore",              // 21 days
 	"Destiny",               // 20 days
 	"Hololive",              // unknown
@@ -50,6 +51,10 @@ var ignoreSubreddits = []string{
 	"anime",              // banned
 	"BackshotsOnly",      // banned
 	"TheArtistStudio",    // banned
+	"MarioKart8Deluxe",   // banned
+	"kansascity",         // banned
+	"ChiefKeef",          // banned
+	"Lostwave",           // banned
 
 	"LatinoPeopleTwitter", // deletes all comments
 
@@ -58,28 +63,48 @@ var ignoreSubreddits = []string{
 	"MadeMeSmile",          // won't unban
 	"unrealengine",         // won't unban unless there's a bot-specific summoning
 	"dataisbeautiful",      // won't unban
-	"aww",                  // 
-	"southafrica",          // 
-	"UberEATS",             // 
-	"trees",                // 
-	"BisexualTeens",        // 
-	"PewdiepieSubmissions", // 
+	"UberEATS",             // won't unban
+	"RealGirls",            // won't unban
+	"ak47",                 // won't unban
+	"technology",           // won't unban
+	"aww",                  //
+	"trees",                //
+	"PewdiepieSubmissions", //
+	"teenagers",            //
+	"Music",                //
+	"criticalrole",         //
+	"blackdesertonline",    //
+	"trashpandas",          //
+	"bizarrelife",          //
 }
 
 var approvedOn = []string{
 	// subreddits where BotDefense banned the bot, but the mods unbanned it after I contacted them
-	"okbuddyretard",    
-	"nextfuckinglevel", 
-	"jacksepticeye",    
-	"MinecraftMemes",  
+	"okbuddyretard",
+	"nextfuckinglevel",
+	"jacksepticeye",
+	"MinecraftMemes",
+	"BisexualTeens",
+	"southafrica",
+	"1000lbsisters",
+
+	// subreddits where links work
+	"TikTokCringe",
+	"roblox",
+	"shitposting",
+	"Cringetopia",
+
+	// subreddits where links were approved
+	"blackmagicfuckery",
 }
 
 type BotConfig struct {
-	AudDToken     string                 `required:"true" default:"test" usage:"the token from dashboard.audd.io" json:"AudDToken"`
-	Triggers      []string               `usage:"phrases bot will react to" json:"Triggers"`
-	AntiTriggers  []string               `usage:"phrases bot will avoid replying to" json:"AudDTAntiTriggers"`
-	ReplySettings map[string]ReplyConfig `required:"true" json:"ReplySettings"`
-	RavenDSN      string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
+	AudDToken          string                 `required:"true" default:"test" usage:"the token from dashboard.audd.io" json:"AudDToken"`
+	Triggers           []string               `usage:"phrases bot will react to" json:"Triggers"`
+	AntiTriggers       []string               `usage:"phrases bot will avoid replying to" json:"AudDTAntiTriggers"`
+	ReplySettings      map[string]ReplyConfig `required:"true" json:"ReplySettings"`
+	LiveStreamMinScore int                    `required:"true" json:"LiveStreamMinScore"`
+	RavenDSN           string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
 }
 
 type ReplyConfig struct {
@@ -101,9 +126,9 @@ func stringInSlice(slice []string, s string) bool {
 	}
 	return false
 }
-func substringInSlice(slice []string, s string) bool {
+func substringInSlice(s string, slice []string) bool {
 	for i := range slice {
-		if strings.Contains(slice[i], s) {
+		if strings.Contains(s, slice[i]) {
 			return true
 		}
 	}
@@ -341,7 +366,7 @@ func GetSkipFromLink(resultUrl string) int {
 	return skip
 }
 
-func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, full bool) string {
+func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, full bool, minScore int) string {
 	if len(result) == 0 {
 		return ""
 	}
@@ -352,6 +377,9 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, full bool) s
 			capture(fmt.Errorf("enterprise response has a result without any songs"))
 		}
 		for _, song := range results.Songs {
+			if song.Score < minScore {
+				continue
+			}
 			if song.SongLink != "" {
 				if _, exists := links[song.SongLink]; exists { // making sure this song isn't a duplicate
 					continue
@@ -365,6 +393,9 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, full bool) s
 				text = fmt.Sprintf("**%s** by %s",
 					song.Title, song.Artist)
 			}
+			if matched {
+				text += fmt.Sprintf(" (%s; matched: `%s`)", song.Timecode, score)
+			}
 			if full {
 				album := ""
 				label := ""
@@ -374,8 +405,8 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, full bool) s
 				if song.Artist != song.Label && song.Label != "Self-released" && song.Label != "" {
 					label = " by `" + song.Label + "`"
 				}
-				text += fmt.Sprintf(" (%s; matched: `%s`)\n\n%sReleased on `%s`%s.",
-					song.Timecode, score, album, song.ReleaseDate, label)
+				text += fmt.Sprintf("\n\n%sReleased on `%s`%s.",
+					album, song.ReleaseDate, label)
 			}
 			texts = append(texts, text)
 		}
@@ -474,7 +505,8 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	body = strings.ToLower(body)
 	rs := strings.Contains(body, "u/recognizesong")
 	summoned := rs || strings.Contains(body, "u/auddbot")
-	if strings.HasSuffix(resultUrl, ".m3u8") {
+	isLivestream := strings.HasSuffix(resultUrl, ".m3u8")
+	if isLivestream {
 		fmt.Println("\nGot a livestream", resultUrl)
 		if summoned {
 			reply := "I'll listen to the next 18 seconds of the stream and try to identify the song"
@@ -487,12 +519,16 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 		limit = 1
 	}
+	minScore := 0
+	if isLivestream {
+		minScore = r.config.LiveStreamMinScore
+	}
 	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(approvedOn, subreddit)) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "skip": strconv.Itoa(skip), "limit": strconv.Itoa(limit)})
-	response := GetReply(result, withLinks, true)
+	response := GetReply(result, withLinks, true, !isLivestream, minScore)
 	if err != nil {
 		if v, ok := err.(*audd.Error); ok {
 			if v.ErrorCode == 501 {
@@ -536,7 +572,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	footer := "\n\n" + strings.Join(footerLinks, " | ")
 
-	if strings.HasSuffix(resultUrl, ".m3u8") {
+	if isLivestream {
 		fmt.Println("\nStream results:", result)
 	}
 	if response == "" {
@@ -568,7 +604,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			}
 			if !withLinks {
 				response = "Links to the streaming platforms:\n\n"
-				response += GetReply(result, true, false)
+				response += GetReply(result, true, false, false, minScore)
 				response += footer
 				if rs {
 					cr, err = r.r.ReplyWithID(sentID, response)
@@ -588,6 +624,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			myRepliesMu.Lock()
 			myReplies[sentID] = comment
 			myRepliesMu.Unlock()
+			// ToDo: save comment ids to a persistent storage
 		}
 	}
 }
@@ -603,7 +640,7 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		return nil
 	}
 	compare := getBodyToCompare(p.Body)
-	if substringInSlice(r.config.AntiTriggers, compare) {
+	if substringInSlice(compare, r.config.AntiTriggers) {
 		fmt.Println("Got an anti-trigger", p.Body)
 		return nil
 	}
@@ -656,7 +693,7 @@ func (r *auddBot) Comment(p *models.Comment) {
 	atomic.AddInt64(&commentsCounter, 1)
 	//return nil
 	compare := getBodyToCompare(p.Body)
-	trigger := substringInSlice(r.config.Triggers, compare)
+	trigger := substringInSlice(compare, r.config.Triggers)
 	// ToDo: move to config
 	if strings.Contains(compare, "bad bot") || strings.Contains(compare, "damn bot") ||
 		strings.Contains(compare, "stupid bot") {
@@ -691,7 +728,7 @@ func (r *auddBot) Comment(p *models.Comment) {
 		fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
 		return
 	}
-	if substringInSlice(r.config.AntiTriggers, compare) {
+	if substringInSlice(compare, r.config.AntiTriggers) {
 		fmt.Println("Got an anti-trigger", p.Body, "https://reddit.com"+p.Permalink)
 		return
 	}
@@ -704,8 +741,8 @@ func (r *auddBot) Comment(p *models.Comment) {
 func (r *auddBot) Post(p *models.Post) {
 	atomic.AddInt64(&postsCounter, 1)
 	compare := getBodyToCompare(p.Selftext)
-	trigger := substringInSlice(r.config.Triggers, compare) ||
-		substringInSlice(r.config.Triggers, strings.ToLower(p.Title))
+	trigger := substringInSlice(compare, r.config.Triggers) ||
+		substringInSlice(strings.ToLower(p.Title), r.config.Triggers)
 	if !trigger {
 		return
 	}
