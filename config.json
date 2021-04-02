@@ -8,6 +8,7 @@
     "has been automatically removed", "your comment was removed",
     "comment here with such low karma", "bot wants to find the best and worst bots"
   ],
+  "LiveStreamMinScore": 70,
   "ReplySettings": {
     "mention": {
       "SendLinks": true,
