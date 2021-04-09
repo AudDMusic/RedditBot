@@ -499,7 +499,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition)",
 	}
 	donateLink := 2
-	if len(result) == 0 {
+	if response == "" {
 		if exists {
 			fmt.Println("Couldn't recognize in a duplicate")
 			return
@@ -822,11 +822,14 @@ func main() {
 			time.Sleep(15 * time.Second)
 			continue
 		}
+		var grawStopChan = make(chan func(), 1)
 		go func() {
 			select {
 			case <-configUpdated:
 				fmt.Println("Reloading config and restarting")
 				stop <- struct{}{}
+				grawStop := <-grawStopChan
+				grawStop()
 				return
 			case <-stop:
 				stop <- struct{}{}
@@ -845,7 +848,6 @@ func main() {
 			time.Sleep(time.Second * 10)
 			continue
 		}
-		var grawStopChan = make(chan func(), 1)
 		go func() {
 			t := time.NewTicker(time.Minute)
 			for {
@@ -853,16 +855,18 @@ func main() {
 				case <-stop:
 					stop <- struct{}{}
 					return
-				default:
+				case <-t.C:
 				}
-				<-t.C
 				newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
 				fmt.Println("Comments:", newComments, "posts:", newPosts)
 				atomic.AddInt64(&commentsCounter, -1*newComments)
 				atomic.AddInt64(&postsCounter, -1*newPosts)
 				if newComments == 0 {
-					grawStop := <-grawStopChan
-					grawStop()
+					select {
+					case grawStop := <-grawStopChan:
+						grawStop()
+					default:
+					}
 					return
 				}
 			}
