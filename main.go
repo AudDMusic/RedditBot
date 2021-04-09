@@ -15,6 +15,7 @@ import (
 	"github.com/turnage/graw"
 	reddit1 "github.com/turnage/graw/reddit"
 	"github.com/turnage/redditproto"
+	"golang.org/x/time/rate"
 	"io/ioutil"
 	"math"
 	"mvdan.cc/xurls/v2"
@@ -780,7 +781,7 @@ func loadConfig(file string) (*BotConfig, error) {
 	return &cfg, nil
 }
 
-func WatchChanges(filename string, updated chan struct{}) {
+func WatchChanges(filename string, updated chan struct{}, l *rate.Limiter) {
 	watcher, err := fsnotify.NewWatcher()
 	capture(err)
 	defer captureFunc(watcher.Close)
@@ -789,8 +790,14 @@ func WatchChanges(filename string, updated chan struct{}) {
 		for {
 			select {
 			case event := <-watcher.Events:
-				updated <- struct{}{}
 				fmt.Println(event)
+				if l != nil {
+					if l.Allow() {
+						updated <- struct{}{}
+					} else {
+						fmt.Println("skipping")
+					}
+				}
 			case err := <-watcher.Errors:
 				capture(err)
 			}
@@ -812,8 +819,9 @@ func main() {
 	if err := raven.SetDSN(cfg.RavenDSN); err != nil {
 		panic(err)
 	}
+	reloadLimiter := rate.NewLimiter(1, 1)
 	configUpdated := make(chan struct{}, 1)
-	go WatchChanges("config.json", configUpdated)
+	go WatchChanges("config.json", configUpdated, reloadLimiter)
 	for {
 		stop := make(chan struct{}, 2)
 		cfg, err := loadConfig("config.json")
@@ -826,7 +834,8 @@ func main() {
 		go func() {
 			select {
 			case <-configUpdated:
-				fmt.Println("Reloading config and restarting")
+				fmt.Println("Waiting 2 seconds, reloading config and restarting")
+				time.Sleep(time.Second * 2)
 				stop <- struct{}{}
 				grawStop := <-grawStopChan
 				grawStop()
