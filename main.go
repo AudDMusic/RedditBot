@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/AudDMusic/audd-go"
+	"github.com/fsnotify/fsnotify"
 	"github.com/getsentry/raven-go"
 	"github.com/golang/protobuf/proto"
 	"github.com/surajJha/go-profanity-hindi"
@@ -29,82 +30,18 @@ import (
 	"time"
 )
 
-//ToDo: move to the config
-var ignoreSubreddits = []string{
-	// subreddits bots should generally avoid
-	"suicidewatch",
-	"depression",
-
-	// subreddits with account age thresholds
-	"wallstreetbets",        // 45 days
-	"NormalDayInArabia",     // 30 days
-	"dogelore",              // 21 days
-	"Destiny",               // 20 days
-	"Hololive",              // unknown
-	"ihaveihaveihavereddit", // unknown
-
-	// subreddits that banned the bot
-	"tiktokthots",        // banned
-	"actuallesbians",     // banned
-	"GraceBoorBoutineLA", // banned
-	"Minecraft",          // banned
-	"anime",              // banned
-	"BackshotsOnly",      // banned
-	"TheArtistStudio",    // banned
-	"MarioKart8Deluxe",   // banned
-	"kansascity",         // banned
-	"ChiefKeef",          // banned
-	"Lostwave",           // banned
-
-	"LatinoPeopleTwitter", // deletes all comments
-
-	// subreddits where BotDefense banned the bot
-	"deadbydaylight",       // won't unban
-	"MadeMeSmile",          // won't unban
-	"unrealengine",         // won't unban unless there's a bot-specific summoning
-	"dataisbeautiful",      // won't unban
-	"UberEATS",             // won't unban
-	"RealGirls",            // won't unban
-	"ak47",                 // won't unban
-	"technology",           // won't unban
-	"aww",                  //
-	"trees",                //
-	"PewdiepieSubmissions", //
-	"teenagers",            //
-	"Music",                //
-	"criticalrole",         //
-	"blackdesertonline",    //
-	"trashpandas",          //
-	"bizarrelife",          //
-}
-
-var approvedOn = []string{
-	// subreddits where BotDefense banned the bot, but the mods unbanned it after I contacted them
-	"okbuddyretard",
-	"nextfuckinglevel",
-	"jacksepticeye",
-	"MinecraftMemes",
-	"BisexualTeens",
-	"southafrica",
-	"1000lbsisters",
-
-	// subreddits where links work
-	"TikTokCringe",
-	"roblox",
-	"shitposting",
-	"Cringetopia",
-
-	// subreddits where links were approved
-	"blackmagicfuckery",
-}
-
 type BotConfig struct {
-	AudDToken          string                 `required:"true" default:"test" usage:"the token from dashboard.audd.io" json:"AudDToken"`
-	Triggers           []string               `usage:"phrases bot will react to" json:"Triggers"`
-	AntiTriggers       []string               `usage:"phrases bot will avoid replying to" json:"AudDTAntiTriggers"`
-	ReplySettings      map[string]ReplyConfig `required:"true" json:"ReplySettings"`
-	LiveStreamMinScore int                    `required:"true" json:"LiveStreamMinScore"`
-	RavenDSN           string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
+	AudDToken             string                 `required:"true" default:"test" usage:"the token from dashboard.audd.io" json:"AudDToken"`
+	Triggers              []string               `usage:"phrases bot will react to" json:"Triggers"`
+	AntiTriggers          []string               `usage:"phrases bot will avoid replying to" json:"AudDTAntiTriggers"`
+	IgnoreSubreddits      []string               `usage:"subreddits to ignore" json:"IgnoreSubreddits"`
+	ApprovedOn            []string               `usage:"subreddits the bot can post links on" json:"ApprovedOn"`
+	DontPostPatreonLinkOn []string               `usage:"subreddits not to post Patreon links on'" json:"DontPostPatreonLinkOn"`
+	ReplySettings         map[string]ReplyConfig `required:"true" json:"ReplySettings"`
+	MaxTriggerTextLength  int                    `json:"MaxTriggerTextLength"`
+	LiveStreamMinScore    int                    `json:"LiveStreamMinScore"`
+	CommentsMinScore      int                    `json:"CommentsMinScore"`
+	RavenDSN              string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
 }
 
 type ReplyConfig struct {
@@ -179,10 +116,9 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 			return "", err
 		}
 		resultUrl = page.Data.Stream.HlsURL
-		if resultUrl == "" {
-			return "", fmt.Errorf("got an empty URL of the live stream HLS")
+		if resultUrl != "" {
+			return resultUrl, nil
 		}
-		return resultUrl, nil
 	}
 	if len(commentsTree) > 0 {
 		if commentsTree[0] != nil {
@@ -261,6 +197,9 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 		if !capture(err) {
 			if len(page) > 0 {
 				if len(page[0].Data.Children) > 0 {
+					if page[0].Data.Children[0].Data.RpanVideo.HlsURL != "" {
+						resultUrl = page[0].Data.Children[0].Data.RpanVideo.HlsURL
+					}
 					if strings.Contains(page[0].Data.Children[0].Data.URL, "v.redd.it") {
 						resultUrl = page[0].Data.Children[0].Data.URL
 					} else {
@@ -461,6 +400,15 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		t, parentID, body, subreddit = "post", string(post.GetID()), post.Selftext, post.Subreddit
 	}
 
+	body = strings.ToLower(body)
+	rs := strings.Contains(body, "u/recognizesong")
+	summoned := rs || strings.Contains(body, "u/auddbot")
+
+	if len(body) > r.config.MaxTriggerTextLength && r.config.MaxTriggerTextLength != 0 && !summoned {
+		fmt.Println("The comment is too long, skipping")
+		return
+	}
+
 	// Avoid handling of both the comment from r/all and the mention
 	var previousUrl string
 	var c chan d
@@ -492,6 +440,11 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		return
 	}
 
+	if strings.Contains(resultUrl, "https://lis.tn/") {
+		fmt.Println("Skipping a reply to our comment")
+		return
+	}
+
 	skip := GetSkipFromLink(resultUrl)
 	if resultUrl == previousUrl {
 		fmt.Println("Got the same URL, skipping")
@@ -502,9 +455,6 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if strings.Contains(resultUrl, "v.redd.it") {
 		limit = 3
 	}
-	body = strings.ToLower(body)
-	rs := strings.Contains(body, "u/recognizesong")
-	summoned := rs || strings.Contains(body, "u/auddbot")
 	isLivestream := strings.HasSuffix(resultUrl, ".m3u8")
 	if isLivestream {
 		fmt.Println("\nGot a livestream", resultUrl)
@@ -519,11 +469,11 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 		limit = 1
 	}
-	minScore := 0
+	minScore := r.config.CommentsMinScore
 	if isLivestream {
 		minScore = r.config.LiveStreamMinScore
 	}
-	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(approvedOn, subreddit)) &&
+	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(r.config.ApprovedOn, subreddit)) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
@@ -567,7 +517,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		c <- d{true, resultUrl}
 	}
 	//if len(result) == 0 || !summoned {
-	if len(result) == 0 || !summoned {
+	if len(result) == 0 || stringInSlice(r.config.DontPostPatreonLinkOn, subreddit) {
 		footerLinks = append(footerLinks[:donateLink], footerLinks[donateLink+1:]...)
 	}
 	footer := "\n\n" + strings.Join(footerLinks, " | ")
@@ -624,7 +574,6 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			myRepliesMu.Lock()
 			myReplies[sentID] = comment
 			myRepliesMu.Unlock()
-			// ToDo: save comment ids to a persistent storage
 		}
 	}
 }
@@ -694,7 +643,6 @@ func (r *auddBot) Comment(p *models.Comment) {
 	//return nil
 	compare := getBodyToCompare(p.Body)
 	trigger := substringInSlice(compare, r.config.Triggers)
-	// ToDo: move to config
 	if strings.Contains(compare, "bad bot") || strings.Contains(compare, "damn bot") ||
 		strings.Contains(compare, "stupid bot") {
 		myRepliesMu.Lock()
@@ -724,7 +672,7 @@ func (r *auddBot) Comment(p *models.Comment) {
 		}
 		return
 	}
-	if stringInSlice(ignoreSubreddits, p.Subreddit) {
+	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
 		fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
 		return
 	}
@@ -811,7 +759,7 @@ func getReddit1Credentials(filename string) reddit1.Bot {
 
 func loadConfig(file string) (*BotConfig, error) {
 	var cfg BotConfig
-	f, err := os.Open("config.json")
+	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
 	}
@@ -823,11 +771,38 @@ func loadConfig(file string) (*BotConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	if stringInSlice(cfg.Triggers, "") {
+		return nil, fmt.Errorf("got a config with an empty string in the triggers")
+	}
+	if stringInSlice(cfg.AntiTriggers, "") {
+		return nil, fmt.Errorf("got a config with an empty string in the anti-triggers")
+	}
 	return &cfg, nil
 }
 
+func WatchChanges(filename string, updated chan struct{}) {
+	watcher, err := fsnotify.NewWatcher()
+	capture(err)
+	defer captureFunc(watcher.Close)
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				updated <- struct{}{}
+				fmt.Println(event)
+			case err := <-watcher.Errors:
+				capture(err)
+			}
+		}
+	}()
+	if err := watcher.Add(filename); err != nil {
+		capture(err)
+	}
+	<-done
+}
+
 func main() {
-	// ToDo: watch the file and reload the config without losing comments and mentions
 	// ToDo: get the config filename from a parameter
 	// ToDo: move agents settings to the config
 	cfg, err := loadConfig("config.json")
@@ -837,8 +812,28 @@ func main() {
 	if err := raven.SetDSN(cfg.RavenDSN); err != nil {
 		panic(err)
 	}
-
+	configUpdated := make(chan struct{}, 1)
+	go WatchChanges("config.json", configUpdated)
 	for {
+		stop := make(chan struct{}, 2)
+		cfg, err := loadConfig("config.json")
+		if err != nil {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		go func() {
+			select {
+			case <-configUpdated:
+				fmt.Println("Reloading config and restarting")
+				stop <- struct{}{}
+				return
+			case <-stop:
+				stop <- struct{}{}
+				return
+			}
+
+		}()
 		handler := &auddBot{
 			config: *cfg,
 			bot:    getReddit1Credentials("RecognizeSong.agent"),
@@ -850,13 +845,13 @@ func main() {
 			time.Sleep(time.Second * 10)
 			continue
 		}
-		stop := make(chan struct{}, 1)
 		var grawStopChan = make(chan func(), 1)
 		go func() {
 			t := time.NewTicker(time.Minute)
 			for {
 				select {
 				case <-stop:
+					stop <- struct{}{}
 					return
 				default:
 				}
@@ -875,28 +870,36 @@ func main() {
 		handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint) // See https://docs.audd.io/enterprise
 		/*_, err := handler.r.ListUnreadMessages()
 		if capture(err) {
-			panic(err)
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
 		}
 		for i := range m {
 			//go handler.Comment(m[i])
 			fmt.Println(m[i].Permalink)
 			capture(handler.r.ReadMessage(m[i].ID))
 		}*/
-		cfg := graw.Config{Mentions: true}
-		grawStop, wait, err := graw.Run(handler, handler.bot, cfg)
+		grawCfg := graw.Config{Mentions: true}
+		grawStop, wait, err := graw.Run(handler, handler.bot, grawCfg)
 		if capture(err) {
-			panic(err)
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
 		}
 		grawStopChan <- grawStop
 		//ToDo: also get inbox messages to avoid not replying to mentions
 
 		postsStream, err := streamSubredditPosts(handler.r, "all")
 		if err != nil {
-			panic(err)
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
 		}
 		commentsStream, err := streamSubredditComments(handler.r2, "all")
 		if err != nil {
-			panic(err)
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
 		}
 		go func() {
 			var s models.Submission
@@ -1103,7 +1106,11 @@ type RedditPageJSON []struct {
 					ID      string `json:"id"`
 					IsGif   bool   `json:"isGif"`
 				} `json:"media_metadata"`
-				URL string `json:"url"`
+				URL       string `json:"url"`
+				RpanVideo struct {
+					HlsURL           string `json:"hls_url"`
+					ScrubberMediaURL string `json:"scrubber_media_url"`
+				} `json:"rpan_video"`
 			} `json:"data"`
 		} `json:"children"`
 		After  interface{} `json:"after"`
