@@ -8,20 +8,107 @@
     "has been automatically removed", "your comment was removed",
     "comment here with such low karma", "bot wants to find the best and worst bots"
   ],
+  "MaxTriggerTextLength": 400,
   "LiveStreamMinScore": 70,
+  "CommentsMinScore": 65,
   "ReplySettings": {
     "mention": {
       "SendLinks": true,
       "ReplyAlways": true
     },
     "comment": {
-      "SendLinks": true,
+      "SendLinks": false,
       "ReplyAlways": false
     },
     "post": {
-      "SendLinks": true,
+      "SendLinks": false,
       "ReplyAlways": false
     }
   },
+  "IgnoreSubreddits": [
+    "// subreddits bots should generally avoid",
+    "suicidewatch",
+    "depression",
+
+    "// subreddits with account age thresholds",
+    "wallstreetbets",        "// 45 days",
+    "yeagerbomb",            "// 30 days",
+    "NormalDayInArabia",     "// 30 days",
+    "Hololive",              "// unknown",
+    "ihaveihaveihavereddit", "// unknown",
+
+    "// subreddits that banned the bot",
+    "tiktokthots",
+    "actuallesbians",
+    "GraceBoorBoutineLA",
+    "Minecraft",
+    "anime",
+    "BackshotsOnly",
+    "TheArtistStudio",
+    "MarioKart8Deluxe",
+    "kansascity",
+    "ChiefKeef",
+    "Lostwave",
+    "kpop",
+
+    "LatinoPeopleTwitter", "// deletes all comments",
+
+    "// subreddits where BotDefense banned the bot",
+
+    "// won't unban",
+    "deadbydaylight",
+    "MadeMeSmile",
+    "unrealengine",   "// unless there's a bot-specific summoning",
+    "dataisbeautiful",
+    "UberEATS",
+    "RealGirls",
+    "ak47",
+    "technology",
+    "cosplay",
+    "aww",
+    "motorcycles",
+
+    "// new",
+    "trees",
+    "PewdiepieSubmissions",
+    "teenagers",
+    "Music",
+    "criticalrole",
+    "blackdesertonline",
+    "trashpandas",
+    "bizarrelife",
+    "Rainmeter",
+    "youtubehaiku",
+    "interestingasfuck",
+    "Naruto",
+    "CombatFootage",
+    "fightporn"
+  ],
+  "ApprovedOn": [
+    "// subreddits where BotDefense banned the bot, but the mods unbanned it after I contacted them",
+    "okbuddyretard",
+    "nextfuckinglevel",
+    "jacksepticeye",
+    "MinecraftMemes",
+    "BisexualTeens",
+    "southafrica",
+    "1000lbsisters",
+    "NarcoFootage",
+
+    "// subreddits where links work",
+    "TikTokCringe",
+    "roblox",
+    "shitposting",
+    "Cringetopia",
+
+    "// subreddits where links were approved",
+    "blackmagicfuckery",
+
+    "// subreddits asked to deliver the message in a single comment",
+    "Bitcoin"
+  ],
+  "DontPostPatreonLinkOn": [
+    "BLACKPINK"
+  ],
   "RavenDSN": ""
 }
