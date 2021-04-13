@@ -275,7 +275,7 @@ func GetSkipFromLink(resultUrl string) int {
 			}
 		}
 		if t != "" {
-			t = strings.ReplaceAll(t, "s", "")
+			t = strings.ToLower(strings.ReplaceAll(t, "s", ""))
 			tInt := 0
 			if strings.Contains(t, "m") {
 				s := strings.Split(t, "m")
@@ -484,6 +484,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		if v, ok := err.(*audd.Error); ok {
 			if v.ErrorCode == 501 {
 				response = fmt.Sprintf("Sorry, I couldn't get any audio from the [link](%s)", resultUrl)
+				if !r.config.ReplySettings[t].ReplyAlways && !summoned {
+					fmt.Println("not summoned and couldn't get any audio, exiting")
+					return
+				}
 			}
 		}
 		if response == "" {
@@ -500,7 +504,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition)",
 	}
 	donateLink := 2
-	if response == "" {
+	if response == "" || len(result) == 0 {
 		if exists {
 			fmt.Println("Couldn't recognize in a duplicate")
 			return
@@ -596,7 +600,6 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 	}
 	go func() {
 		capture(r.r.ReadMessage(p.Name))
-		capture(r.r.ReadMessage(p.ID))
 	}()
 	r.HandleQuery(p, nil, nil)
 	return nil
@@ -608,7 +611,7 @@ func replaceSlice(s, new string, oldStrings ...string) string {
 	return s
 }
 func getBodyToCompare(body string) string {
-	return strings.ToLower(replaceSlice(body, "", "'", "’", "`"))
+	return strings.ToLower(replaceSlice(body, "", "'", "’", "`")) + "?"
 }
 
 func distance(s, sub1, sub2 string) (int, bool) {
