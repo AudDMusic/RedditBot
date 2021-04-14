@@ -260,52 +260,6 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 	return r.GetLinkFromComment(mention, commentsTree, post)
 }
 
-func GetSkipFromLink(resultUrl string) int {
-	skip := -1
-	if strings.HasSuffix(resultUrl, ".m3u8") {
-		return skip
-	}
-	u, err := url.Parse(resultUrl)
-	if err == nil {
-		t := u.Query().Get("t")
-		if t == "" {
-			t = u.Query().Get("time_continue") // Thanks to mike-fmh for the idea of "start" and "time_continue"
-			if t == "" {
-				t = u.Query().Get("start")
-			}
-		}
-		if t != "" {
-			t = strings.ToLower(strings.ReplaceAll(t, "s", ""))
-			tInt := 0
-			if strings.Contains(t, "m") {
-				s := strings.Split(t, "m")
-				tsInt, _ := strconv.Atoi(s[1])
-				tInt += tsInt
-				if strings.Contains(s[0], "h") {
-					s := strings.Split(s[0], "h")
-					if tmInt, err := strconv.Atoi(s[1]); !capture(err) {
-						tInt += tmInt * 60
-					}
-					if thInt, err := strconv.Atoi(s[0]); !capture(err) {
-						tInt += thInt * 60 * 60
-					}
-				} else {
-					if tmInt, err := strconv.Atoi(s[0]); !capture(err) {
-						tInt += tmInt * 60
-					}
-				}
-			} else {
-				if tsInt, err := strconv.Atoi(t); !capture(err) {
-					tInt = tsInt
-				}
-			}
-			skip -= tInt / 18
-			fmt.Println("skip:", skip)
-		}
-	}
-	return skip
-}
-
 func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, full bool, minScore int) string {
 	if len(result) == 0 {
 		return ""
@@ -387,6 +341,52 @@ type myComment struct {
 
 var myRepliesMu = &sync.Mutex{}
 
+func GetSkipFirstFromLink(Url string) int {
+	skip := 0
+	if strings.HasSuffix(Url, ".m3u8") {
+		return skip
+	}
+	u, err := url.Parse(Url)
+	if err == nil {
+		t := u.Query().Get("t")
+		if t == "" {
+			t = u.Query().Get("time_continue")
+			if t == "" {
+				t = u.Query().Get("start")
+			}
+		}
+		if t != "" {
+			t = strings.ToLower(strings.ReplaceAll(t, "s", ""))
+			tInt := 0
+			if strings.Contains(t, "m") {
+				s := strings.Split(t, "m")
+				tsInt, _ := strconv.Atoi(s[1])
+				tInt += tsInt
+				if strings.Contains(s[0], "h") {
+					s := strings.Split(s[0], "h")
+					if tmInt, err := strconv.Atoi(s[1]); !capture(err) {
+						tInt += tmInt * 60
+					}
+					if thInt, err := strconv.Atoi(s[0]); !capture(err) {
+						tInt += thInt * 60 * 60
+					}
+				} else {
+					if tmInt, err := strconv.Atoi(s[0]); !capture(err) {
+						tInt += tmInt * 60
+					}
+				}
+			} else {
+				if tsInt, err := strconv.Atoi(t); !capture(err) {
+					tInt = tsInt
+				}
+			}
+			skip += tInt / 18
+			fmt.Println("skip:", skip)
+		}
+	}
+	return skip
+}
+
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
 	var resultUrl, t, parentID, body, subreddit string
 	var err error
@@ -445,8 +445,6 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		fmt.Println("Skipping a reply to our comment")
 		return
 	}
-
-	skip := GetSkipFromLink(resultUrl)
 	if resultUrl == previousUrl {
 		fmt.Println("Got the same URL, skipping")
 		return
@@ -478,7 +476,8 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
 	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
-		map[string]string{"accurate_offsets": "true", "skip": strconv.Itoa(skip), "limit": strconv.Itoa(limit)})
+		map[string]string{"accurate_offsets": "true", "use_timecode": "true",
+			"process_content": "true", "limit": strconv.Itoa(limit)})
 	response := GetReply(result, withLinks, true, !isLivestream, minScore)
 	if err != nil {
 		if v, ok := err.(*audd.Error); ok {
@@ -531,8 +530,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		fmt.Println("\nStream results:", result)
 	}
 	if response == "" {
-		timestamp := skip*-1 - 1
-		timestamp *= 18
+		timestamp := GetSkipFirstFromLink(resultUrl) * 18
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
 			"\n\nI tried to identify music from the [link](%s) at %d-%d seconds.",
 			resultUrl, timestamp, timestamp+limit*18)
