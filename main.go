@@ -380,7 +380,7 @@ func GetSkipFirstFromLink(Url string) int {
 					tInt = tsInt
 				}
 			}
-			skip += tInt / 18
+			skip += tInt / 12
 			fmt.Println("skip:", skip)
 		}
 	}
@@ -458,7 +458,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if isLivestream {
 		fmt.Println("\nGot a livestream", resultUrl)
 		if summoned {
-			reply := "I'll listen to the next 18 seconds of the stream and try to identify the song"
+			reply := "I'll listen to the next 12 seconds of the stream and try to identify the song"
 			if rs {
 				go r.r.ReplyWithID(parentID, reply)
 
@@ -530,10 +530,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		fmt.Println("\nStream results:", result)
 	}
 	if response == "" {
-		timestamp := GetSkipFirstFromLink(resultUrl) * 18
+		timestamp := GetSkipFirstFromLink(resultUrl) * 12
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
 			"\n\nI tried to identify music from the [link](%s) at %d-%d seconds.",
-			resultUrl, timestamp, timestamp+limit*18)
+			resultUrl, timestamp, timestamp+limit*12)
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
 			response = "Sorry, I couldn't get the video URL from the post or your comment."
 		}
