@@ -274,6 +274,13 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			if song.Score < minScore {
 				continue
 			}
+			if song.SongLink == "rvXTou" || song.SongLink == "XIhppO" {
+				song.Artist = "The Caretaker (Leyland James Kirby)"
+				song.Title = "Everywhere at the End of Time - Stage 1"
+				song.Album = "Everywhere at the End of Time - Stage 1"
+				song.ReleaseDate = "2016-09-22"
+				song.SongLink = "https://www.youtube.com/watch?v=wJWksPWDKOc"
+			}
 			if song.SongLink != "" {
 				if _, exists := links[song.SongLink]; exists { // making sure this song isn't a duplicate
 					continue
@@ -473,7 +480,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		minScore = r.config.LiveStreamMinScore
 	}
 	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(r.config.ApprovedOn, subreddit)) &&
-		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl")
+		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl") || isLivestream
 	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "use_timecode": "true",
@@ -518,6 +525,11 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			return
 		}
 	} else {
+		if result[0].Songs[0].Score < 100 && !isLivestream {
+			footerLinks[0] += " | If the matched percent is less than 100, it could be a false positive result. " +
+				"I'm still posting it, because sometimes I get it right even if I'm not sure, so it could be helpful. " +
+				"But please don't be mad at me if I'm wrong! I'm trying my best!"
+		}
 		c <- d{true, resultUrl}
 	}
 	//if len(result) == 0 || !summoned {
@@ -993,7 +1005,7 @@ func streamSubredditPosts(c *mira.Reddit, name string) (*mira.SubmissionStream, 
 			} else if len(posts) > 2 {
 				last = posts[1].GetID()
 			}
-			time.Sleep(15 * time.Second)
+			time.Sleep(13 * time.Second)
 		}
 	}()
 	return s, nil
