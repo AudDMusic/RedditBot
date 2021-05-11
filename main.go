@@ -38,6 +38,7 @@ type BotConfig struct {
 	IgnoreSubreddits      []string               `usage:"subreddits to ignore" json:"IgnoreSubreddits"`
 	ApprovedOn            []string               `usage:"subreddits the bot can post links on" json:"ApprovedOn"`
 	DontPostPatreonLinkOn []string               `usage:"subreddits not to post Patreon links on'" json:"DontPostPatreonLinkOn"`
+	DontUseFormattingOn []string               `usage:"subreddits not to use formatting on'" json:"DontUseFormattingOn"`
 	ReplySettings         map[string]ReplyConfig `required:"true" json:"ReplySettings"`
 	MaxTriggerTextLength  int                    `json:"MaxTriggerTextLength"`
 	LiveStreamMinScore    int                    `json:"LiveStreamMinScore"`
@@ -274,7 +275,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			if song.Score < minScore {
 				continue
 			}
-			if song.SongLink == "rvXTou" || song.SongLink == "XIhppO" {
+			if song.SongLink == "https://lis.tn/rvXTou" || song.SongLink == "https://lis.tn/XIhppO" {
 				song.Artist = "The Caretaker (Leyland James Kirby)"
 				song.Title = "Everywhere at the End of Time - Stage 1"
 				song.Album = "Everywhere at the End of Time - Stage 1"
@@ -394,6 +395,14 @@ func GetSkipFirstFromLink(Url string) int {
 	return skip
 }
 
+func removeFormatting(response string) string {
+	response = strings.ReplaceAll(response, "**", "*")
+	response = strings.ReplaceAll(response, "*", "\\*")
+	response = strings.ReplaceAll(response, "`", "'")
+	response = strings.ReplaceAll(response, "^", "")
+	return response
+}
+
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
 	var resultUrl, t, parentID, body, subreddit string
 	var err error
@@ -483,8 +492,8 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl") || isLivestream
 	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
-		map[string]string{"accurate_offsets": "true", "use_timecode": "true",
-			"process_content": "true", "limit": strconv.Itoa(limit)})
+		map[string]string{"accurate_offsets": "true", "use_timecode": "true", "limit": strconv.Itoa(limit)})
+	useFormatting := !stringInSlice(r.config.DontUseFormattingOn, subreddit)
 	response := GetReply(result, withLinks, true, !isLivestream, minScore)
 	if err != nil {
 		if v, ok := err.(*audd.Error); ok {
@@ -507,7 +516,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
 		"[Donate](https://www.patreon.com/audd)",
-		"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition)",
+		"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition%20"+parentID+")",
 	}
 	donateLink := 2
 	if response == "" || len(result) == 0 {
@@ -525,6 +534,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			return
 		}
 	} else {
+		if result[0].Songs[0].Score == 100 {
+			footerLinks[2] += " ^(If I helped you, please consider supporting me on Patreon. I cost my creators about $100 per month)"
+		}
 		if result[0].Songs[0].Score < 100 && !isLivestream {
 			footerLinks[0] += " | If the matched percent is less than 100, it could be a false positive result. " +
 				"I'm still posting it, because sometimes I get it right even if I'm not sure, so it could be helpful. " +
@@ -553,6 +565,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if withLinks {
 		response += footer
 	}
+	if !useFormatting {
+		response = removeFormatting(response)
+	}
 	fmt.Println(response)
 	var cr *models.CommentActionResponse
 	if rs {
@@ -571,6 +586,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 				response = "Links to the streaming platforms:\n\n"
 				response += GetReply(result, true, false, false, minScore)
 				response += footer
+				if !useFormatting {
+					response = removeFormatting(response)
+				}
 				if rs {
 					cr, err = r.r.ReplyWithID(sentID, response)
 				} else {
@@ -621,7 +639,7 @@ func replaceSlice(s, new string, oldStrings ...string) string {
 	return s
 }
 func getBodyToCompare(body string) string {
-	return strings.ToLower(replaceSlice(body, "", "'", "’", "`")) + "?"
+	return "\n"+strings.ToLower(replaceSlice(body, "", "'", "’", "`")) + "?"
 }
 
 func distance(s, sub1, sub2 string) (int, bool) {
@@ -796,6 +814,364 @@ func loadConfig(file string) (*BotConfig, error) {
 
 func WatchChanges(filename string, updated chan struct{}, l *rate.Limiter) {
 	watcher, err := fsnotify.NewWatcher()
+	capture(err)
+	defer captureFunc(watcher.Close)
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				fmt.Println(event)
+				if l != nil {
+					if l.Allow() {
+						updated <- struct{}{}
+					} else {
+						fmt.Println("skipping")
+					}
+				}
+			case err := <-watcher.Errors:
+				capture(err)
+			}
+		}
+	}()
+	if err := watcher.Add(filename); err != nil {
+		capture(err)
+	}
+	<-done
+}
+
+func main() {
+	// ToDo: get the config filename from a parameter
+	// ToDo: move agents settings to the config
+	cfg, err := loadConfig("config.json")
+	if err != nil {
+		panic(err)
+	}
+	if err := raven.SetDSN(cfg.RavenDSN); err != nil {
+		panic(err)
+	}
+	reloadLimiter := rate.NewLimiter(1, 1)
+	configUpdated := make(chan struct{}, 1)
+	go WatchChanges("config.json", configUpdated, reloadLimiter)
+	for {
+		stop := make(chan struct{}, 2)
+		cfg, err := loadConfig("config.json")
+		if err != nil {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		var grawStopChan = make(chan func(), 1)
+		go func() {
+			select {
+			case <-configUpdated:
+				fmt.Println("Waiting 2 seconds, reloading config and restarting")
+				time.Sleep(time.Second * 2)
+				stop <- struct{}{}
+				grawStop := <-grawStopChan
+				grawStop()
+				return
+			case <-stop:
+				stop <- struct{}{}
+				return
+			}
+
+		}()
+		handler := &auddBot{
+			config: *cfg,
+			bot:    getReddit1Credentials("RecognizeSong.agent"),
+			audd:   audd.NewClient(cfg.AudDToken),
+			r:      getReddit2Credentials("RecognizeSong.agent"),
+			r2:     getReddit2Credentials("auddbot.agent"),
+		}
+		if handler.bot == nil || handler.r == nil || handler.r2 == nil {
+			time.Sleep(time.Second * 10)
+			continue
+		}
+		go func() {
+			t := time.NewTicker(time.Minute)
+			for {
+				select {
+				case <-stop:
+					stop <- struct{}{}
+					return
+				case <-t.C:
+				}
+				newComments, newPosts := atomic.LoadInt64(&commentsCounter), atomic.LoadInt64(&postsCounter)
+				fmt.Println("Comments:", newComments, "posts:", newPosts)
+				atomic.AddInt64(&commentsCounter, -1*newComments)
+				atomic.AddInt64(&postsCounter, -1*newPosts)
+				if newComments == 0 {
+					select {
+					case grawStop := <-grawStopChan:
+						grawStop()
+					default:
+					}
+					return
+				}
+			}
+		}()
+		handler.audd.SetEndpoint(audd.EnterpriseAPIEndpoint) // See https://docs.audd.io/enterprise
+		/*_, err := handler.r.ListUnreadMessages()
+		if capture(err) {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		for i := range m {
+			//go handler.Comment(m[i])
+			fmt.Println(m[i].Permalink)
+			capture(handler.r.ReadMessage(m[i].ID))
+		}*/
+		grawCfg := graw.Config{Mentions: true}
+		grawStop, wait, err := graw.Run(handler, handler.bot, grawCfg)
+		if capture(err) {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		grawStopChan <- grawStop
+		//ToDo: also get inbox messages to avoid not replying to mentions
+
+		postsStream, err := streamSubredditPosts(handler.r, "all")
+		if err != nil {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		commentsStream, err := streamSubredditComments(handler.r2, "all")
+		if err != nil {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		go func() {
+			var s models.Submission
+			var p *models.Post
+			for s = range postsStream.C {
+				if s == nil {
+					fmt.Println("Stream was closed")
+					return
+				}
+				//go atomic.AddUint64(&postsCounter, 1)
+				p = s.(*models.Post)
+				go handler.Post(p)
+			}
+		}()
+		go func() {
+			var s models.Submission
+			for s = range commentsStream.C {
+				var c *models.Comment
+				if s == nil {
+					fmt.Println("Stream was closed")
+					return
+				}
+				//go atomic.AddUint64(&commentsCounter, 1)
+				c = s.(*models.Comment)
+				go handler.Comment(c)
+			}
+		}()
+		fmt.Println("started")
+		fmt.Println("graw run failed: ", wait())
+		go func() {
+			commentsStream.Close <- struct{}{}
+			postsStream.Close <- struct{}{}
+			stop <- struct{}{}
+		}()
+	}
+
+}
+
+func streamSubredditPosts(c *mira.Reddit, name string) (*mira.SubmissionStream, error) {
+	sendC := make(chan models.Submission, 100)
+	s := &mira.SubmissionStream{
+		C:     sendC,
+		Close: make(chan struct{}),
+	}
+	_, err := c.Subreddit(name).Posts("new", "all", 1)
+	if err != nil {
+		return nil, err
+	}
+	var last models.RedditID
+	go func() {
+		sent := ring.New(100)
+		for {
+			select {
+			case <-s.Close:
+				close(sendC)
+				return
+			default:
+			}
+			posts, err := c.Subreddit(name).PostsAfter(last, 100)
+			if err != nil {
+				close(sendC)
+				return
+			}
+			if len(posts) > 95 {
+				//fmt.Printf("%d new posts | ", len(posts))
+			}
+			for i := len(posts) - 1; i >= 0; i-- {
+				if ringContains(sent, posts[i].GetID()) {
+					continue
+				}
+				sendC <- posts[i]
+				sent.Value = posts[i].GetID()
+				sent = sent.Next()
+			}
+			if len(posts) == 0 {
+				last = ""
+			} else if len(posts) > 2 {
+				last = posts[1].GetID()
+			}
+			time.Sleep(13 * time.Second)
+		}
+	}()
+	return s, nil
+}
+
+func streamSubredditComments(c *mira.Reddit, name string) (*mira.SubmissionStream, error) {
+	sendC := make(chan models.Submission, 100)
+	s := &mira.SubmissionStream{
+		C:     sendC,
+		Close: make(chan struct{}),
+	}
+	_, err := c.Subreddit(name).Posts("new", "all", 1)
+	if err != nil {
+		return nil, err
+	}
+	var last models.RedditID
+	go func() {
+		sent := ring.New(100)
+		T := time.NewTicker(time.Millisecond * 1300)
+		for {
+			select {
+			case <-s.Close:
+				close(sendC)
+				return
+			default:
+			}
+			comments, err := c.Subreddit(name).CommentsAfter("new", last, 100)
+			if err != nil {
+				close(sendC)
+				return
+			}
+			if len(comments) > 95 {
+				//fmt.Printf("%d new comments | ", len(comments))
+			}
+			for i := len(comments) - 1; i >= 0; i-- {
+				if ringContains(sent, comments[i].GetID()) {
+					continue
+				}
+				//fmt.Print("a")
+				sendC <- comments[i]
+				sent.Value = comments[i].GetID()
+				sent = sent.Next()
+			}
+			if len(comments) == 0 {
+				last = ""
+			} else if len(comments) > 2 {
+				last = comments[1].GetID()
+			}
+			<-T.C
+		}
+	}()
+	return s, nil
+}
+
+func ringContains(r *ring.Ring, n models.RedditID) bool {
+	ret := false
+	r.Do(func(p interface{}) {
+		if p == nil {
+			return
+		}
+		i := p.(models.RedditID)
+		if i == n {
+			ret = true
+		}
+	})
+	return ret
+}
+
+func capture(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, file, no, ok := runtime.Caller(1)
+	if ok {
+		err = fmt.Errorf("%v from %s#%d", err, file, no)
+	}
+	packet := raven.NewPacket(err.Error(), raven.NewException(err, raven.GetOrNewStacktrace(err, 1, 3, nil)))
+	go raven.Capture(packet, nil)
+	fmt.Println(err.Error())
+	return true
+}
+
+func captureFunc(f func() error) (r bool) {
+	err := f()
+	if r = err != nil; r {
+		_, file, no, ok := runtime.Caller(1)
+		if ok {
+			err = fmt.Errorf("%v from %s#%d", err, file, no)
+		}
+		go raven.CaptureError(err, nil)
+	}
+	return
+}
+
+func commentToMessage(comment *models.Comment) *reddit1.Message {
+	if comment == nil {
+		return nil
+	}
+	return &reddit1.Message{
+		ID:         comment.ID,
+		Name:       string(comment.GetID()),
+		CreatedUTC: uint64(comment.CreatedUTC),
+		Author:     comment.Author,
+		Body:       comment.Body,
+		BodyHTML:   comment.BodyHTML,
+		Context:    comment.Permalink,
+		ParentID:   string(comment.ParentID),
+		Subreddit:  comment.Subreddit,
+		WasComment: true,
+	}
+}
+
+type RedditPageJSON []struct {
+	Data struct {
+		Children []struct {
+			Data struct {
+				MediaMetadata map[string]struct {
+					Status  string `json:"status"`
+					E       string `json:"e"`
+					DashURL string `json:"dashUrl"`
+					X       int    `json:"x"`
+					Y       int    `json:"y"`
+					HlsURL  string `json:"hlsUrl"`
+					ID      string `json:"id"`
+					IsGif   bool   `json:"isGif"`
+				} `json:"media_metadata"`
+				URL       string `json:"url"`
+				RpanVideo struct {
+					HlsURL           string `json:"hls_url"`
+					ScrubberMediaURL string `json:"scrubber_media_url"`
+				} `json:"rpan_video"`
+			} `json:"data"`
+		} `json:"children"`
+		After  interface{} `json:"after"`
+		Before interface{} `json:"before"`
+	} `json:"data"`
+}
+
+type RedditStreamJSON struct {
+	Data struct {
+		Stream struct {
+			StreamID string `json:"stream_id"`
+			HlsURL   string `json:"hls_url"`
+			State    string `json:"state"`
+		} `json:"stream"`
+	} `json:"data"`
+}
+Watcher()
 	capture(err)
 	defer captureFunc(watcher.Close)
 	done := make(chan bool)
