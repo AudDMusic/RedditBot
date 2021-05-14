@@ -568,7 +568,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if !useFormatting {
 		response = removeFormatting(response)
 	}
-	fmt.Println(response)
+	// fmt.Println(response)
 	var cr *models.CommentActionResponse
 	if rs {
 		cr, err = r.r.ReplyWithID(parentID, response)
@@ -695,6 +695,7 @@ func (r *auddBot) Comment(p *models.Comment) {
 			}
 			capture(err)
 			fmt.Println("got a bad bot comment", "https://reddit.com"+p.Permalink)
+			return
 		}
 	}
 	if !trigger {
@@ -703,6 +704,12 @@ func (r *auddBot) Comment(p *models.Comment) {
 			fmt.Println("Skipping comment:", compare, "https://reddit.com"+p.Permalink)
 		}
 		return
+	}
+	myRepliesMu.Lock()
+	_, exists := myReplies[string(p.ParentID)]
+	myRepliesMu.Unlock()
+	if exists {
+		fmt.Println("Ignoring a comment that's a reply to ours:", "https://reddit.com"+p.Permalink)
 	}
 	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
 		fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
@@ -713,7 +720,7 @@ func (r *auddBot) Comment(p *models.Comment) {
 		return
 	}
 	//j, _ := json.Marshal(p)
-	fmt.Println("\n😻 Got a comment", "https://reddit.com"+p.Permalink, p.Body)
+	// fmt.Println("\n😻 Got a comment", "https://reddit.com"+p.Permalink, p.Body)
 	r.HandleQuery(nil, p, nil)
 	return
 }
