@@ -289,10 +289,10 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				links[song.SongLink] = true
 			}
 			score := strconv.Itoa(song.Score) + "%"
-			text := fmt.Sprintf("[**%s** by %s](%s)",
+			text := fmt.Sprintf("• [**%s** by %s](%s)",
 				song.Title, song.Artist, song.SongLink)
 			if !withLinks {
-				text = fmt.Sprintf("**%s** by %s",
+				text = fmt.Sprintf("• **%s** by %s",
 					song.Title, song.Artist)
 			}
 			if matched {
@@ -422,7 +422,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	summoned := rs || strings.Contains(body, "u/auddbot")
 
 	if len(body) > r.config.MaxTriggerTextLength && r.config.MaxTriggerTextLength != 0 && !summoned {
-		fmt.Println("The comment is too long, skipping")
+		fmt.Println("The comment is too long, skipping", body)
 		return
 	}
 
@@ -535,7 +535,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 	} else {
 		if result[0].Songs[0].Score == 100 {
-			footerLinks[2] += " ^(If I helped you, please consider supporting me on Patreon. I cost my creators about $100 per month)"
+			footerLinks[2] += " ^(If I helped you, please consider supporting me on Patreon. Music recognition costs a lot)"
 		}
 		if result[0].Songs[0].Score < 100 && !isLivestream {
 			footerLinks[0] += " | If the matched percent is less than 100, it could be a false positive result. " +
@@ -543,6 +543,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 				"But please don't be mad at me if I'm wrong! I'm trying my best!"
 		}
 		c <- d{true, resultUrl}
+	}
+	if strings.Contains(body, "find-song") && !summoned {
+		footerLinks[0] += " | ^(find-song went offline; its creator gave me a permission to react to the find-song mentions)"
 	}
 	//if len(result) == 0 || !summoned {
 	if len(result) == 0 || stringInSlice(r.config.DontPostPatreonLinkOn, subreddit) {
@@ -639,7 +642,7 @@ func replaceSlice(s, new string, oldStrings ...string) string {
 	return s
 }
 func getBodyToCompare(body string) string {
-	return "\n"+strings.ToLower(replaceSlice(body, "", "'", "’", "`")) + "?"
+	return "\n"+strings.ReplaceAll(strings.ToLower(replaceSlice(body, "", "'", "’", "`")), "what is", "whats") + "?"
 }
 
 func distance(s, sub1, sub2 string) (int, bool) {
