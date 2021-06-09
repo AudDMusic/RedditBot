@@ -38,7 +38,7 @@ type BotConfig struct {
 	IgnoreSubreddits      []string               `usage:"subreddits to ignore" json:"IgnoreSubreddits"`
 	ApprovedOn            []string               `usage:"subreddits the bot can post links on" json:"ApprovedOn"`
 	DontPostPatreonLinkOn []string               `usage:"subreddits not to post Patreon links on'" json:"DontPostPatreonLinkOn"`
-	DontUseFormattingOn []string               `usage:"subreddits not to use formatting on'" json:"DontUseFormattingOn"`
+	DontUseFormattingOn   []string               `usage:"subreddits not to use formatting on'" json:"DontUseFormattingOn"`
 	ReplySettings         map[string]ReplyConfig `required:"true" json:"ReplySettings"`
 	MaxTriggerTextLength  int                    `json:"MaxTriggerTextLength"`
 	LiveStreamMinScore    int                    `json:"LiveStreamMinScore"`
@@ -57,6 +57,10 @@ var postsCounter int64 = 0
 var markdownRegex = regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
 var rxStrict = xurls.Strict()
 
+const configFile = "config.json"
+const AudDBotConfig = "auddbot.agent"
+const RecognizeSongBotConfig = "RecognizeSong.agent"
+
 func stringInSlice(slice []string, s string) bool {
 	for i := range slice {
 		if s == slice[i] {
@@ -72,6 +76,23 @@ func substringInSlice(s string, slice []string) bool {
 		}
 	}
 	return false
+}
+
+func TimeStringToSeconds(s string) (int, error) {
+	list := strings.Split(s, ":")
+	if len(list) > 3 {
+		return 0, fmt.Errorf("too many : thingies")
+	}
+	result, multiplier := 0, 1
+	for i := len(list) - 1; i >= 0; i-- {
+		c, err := strconv.Atoi(list[i])
+		if err != nil {
+			return 0, err
+		}
+		result += c * multiplier
+		multiplier *= 60
+	}
+	return result, nil
 }
 
 func linksFromBody(body string) [][]string {
@@ -289,10 +310,10 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				links[song.SongLink] = true
 			}
 			score := strconv.Itoa(song.Score) + "%"
-			text := fmt.Sprintf("• [**%s** by %s](%s)",
+			text := fmt.Sprintf("[**%s** by %s](%s)",
 				song.Title, song.Artist, song.SongLink)
 			if !withLinks {
-				text = fmt.Sprintf("• **%s** by %s",
+				text = fmt.Sprintf("**%s** by %s",
 					song.Title, song.Artist)
 			}
 			if matched {
@@ -323,8 +344,9 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 		} else {
 			response = ""
 		}
-		for i, text := range texts {
-			response += fmt.Sprintf("\n\n%d. %s", i+1, text)
+		for _, text := range texts {
+			// response += fmt.Sprintf("\n\n%d. %s", i+1, text)
+			response += fmt.Sprintf("\n\n• %s", text)
 		}
 	}
 	response = profanity.MaskProfanity(response, "#")
@@ -418,8 +440,8 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 
 	body = strings.ToLower(body)
-	rs := strings.Contains(body, "u/recognizesong")
-	summoned := rs || strings.Contains(body, "u/auddbot")
+	rs := strings.Contains(body, "recognizesong")
+	summoned := rs || strings.Contains(body, "auddbot")
 
 	if len(body) > r.config.MaxTriggerTextLength && r.config.MaxTriggerTextLength != 0 && !summoned {
 		fmt.Println("The comment is too long, skipping", body)
@@ -515,8 +537,8 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"*I am a bot and this action was performed automatically*",
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
-		"[Donate](https://www.patreon.com/audd)",
-		"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition%20"+parentID+")",
+		"[Donate](https://www.reddit.com/user/auddbot/comments/nuac09/please_consider_donating_and_making_the_bot_happy/)",
+		//"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition%20" + parentID + ")",
 	}
 	donateLink := 2
 	if response == "" || len(result) == 0 {
@@ -635,6 +657,52 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 	r.HandleQuery(p, nil, nil)
 	return nil
 }
+func (r *auddBot) CommentReply(p *reddit1.Message) error {
+	// Note: it looks like we don't get all the mentions through this
+	// In particular, we don't get mentions in replies to our comments
+	//j, _ := json.Marshal(p)
+	//fmt.Println("\n😻 Got a mention", string(j))
+	fmt.Println("\n😻 Got a mention", p.Body)
+	if !p.New {
+		fmt.Println("Not a new mention")
+		return nil
+	}
+	compare := getBodyToCompare(p.Body)
+	if substringInSlice(compare, r.config.AntiTriggers) {
+		fmt.Println("Got an anti-trigger", p.Body)
+		return nil
+	}
+
+	if strings.Contains(compare, "bad bot") || strings.Contains(compare, "damn bot") ||
+		strings.Contains(compare, "stupid bot") {
+		myRepliesMu.Lock()
+		comment, exists := myReplies[string(p.ParentID)]
+		myRepliesMu.Unlock()
+		if exists && !comment.summoned {
+			var err2 error
+			target := mira.RedditOauth + "/api/del"
+			_, err := r.r2.MiraRequest("POST", target, map[string]string{
+				"id":       comment.commentID,
+				"api_type": "json",
+			})
+
+			if comment.additionalCommentID != "" {
+				_, err2 = r.r2.MiraRequest("POST", target, map[string]string{
+					"id":       comment.additionalCommentID,
+					"api_type": "json",
+				})
+			}
+			if !capture(err) && !capture(err2) {
+				myRepliesMu.Lock()
+				delete(myReplies, string(p.ParentID))
+				myRepliesMu.Unlock()
+			}
+			fmt.Println("got a bad bot comment", "https://reddit.com//comments/"+p.ParentID+"/"+p.ID)
+			capture(r.r.ReadMessage(p.Name))
+		}
+	}
+	return nil
+}
 func replaceSlice(s, new string, oldStrings ...string) string {
 	for _, old := range oldStrings {
 		s = strings.ReplaceAll(s, old, new)
@@ -642,7 +710,7 @@ func replaceSlice(s, new string, oldStrings ...string) string {
 	return s
 }
 func getBodyToCompare(body string) string {
-	return "\n"+strings.ReplaceAll(strings.ToLower(replaceSlice(body, "", "'", "’", "`")), "what is", "whats") + "?"
+	return "\n" + strings.ReplaceAll(strings.ToLower(replaceSlice(body, "", "'", "’", "`")), "what is", "whats") + "?"
 }
 
 func distance(s, sub1, sub2 string) (int, bool) {
@@ -745,6 +813,7 @@ func (r *auddBot) Post(p *models.Post) {
 type auddBot struct {
 	config BotConfig
 	bot    reddit1.Bot
+	bot2   reddit1.Bot
 	audd   *audd.Client
 	r      *mira.Reddit
 	r2     *mira.Reddit
@@ -853,7 +922,7 @@ func WatchChanges(filename string, updated chan struct{}, l *rate.Limiter) {
 func main() {
 	// ToDo: get the config filename from a parameter
 	// ToDo: move agents settings to the config
-	cfg, err := loadConfig("config.json")
+	cfg, err := loadConfig(configFile)
 	if err != nil {
 		panic(err)
 	}
@@ -862,39 +931,47 @@ func main() {
 	}
 	reloadLimiter := rate.NewLimiter(1, 1)
 	configUpdated := make(chan struct{}, 1)
-	go WatchChanges("config.json", configUpdated, reloadLimiter)
+	go WatchChanges(configFile, configUpdated, reloadLimiter)
 	for {
 		stop := make(chan struct{}, 2)
-		cfg, err := loadConfig("config.json")
+		cfg, err := loadConfig(configFile)
 		if err != nil {
 			capture(err)
 			time.Sleep(15 * time.Second)
 			continue
 		}
-		var grawStopChan = make(chan func(), 1)
+		var grawStopChan = make(chan func(), 2)
 		go func() {
 			select {
 			case <-configUpdated:
 				fmt.Println("Waiting 2 seconds, reloading config and restarting")
 				time.Sleep(time.Second * 2)
 				stop <- struct{}{}
-				grawStop := <-grawStopChan
-				grawStop()
+				select {
+				case grawStop := <-grawStopChan:
+					grawStop()
+				default:
+				}
+				select {
+				case grawStop := <-grawStopChan:
+					grawStop()
+				default:
+				}
 				return
 			case <-stop:
 				stop <- struct{}{}
 				return
 			}
-
 		}()
 		handler := &auddBot{
 			config: *cfg,
-			bot:    getReddit1Credentials("RecognizeSong.agent"),
+			bot:    getReddit1Credentials(AudDBotConfig),
+			bot2:   getReddit1Credentials(RecognizeSongBotConfig),
 			audd:   audd.NewClient(cfg.AudDToken),
-			r:      getReddit2Credentials("RecognizeSong.agent"),
-			r2:     getReddit2Credentials("auddbot.agent"),
+			r:      getReddit2Credentials(RecognizeSongBotConfig),
+			r2:     getReddit2Credentials(AudDBotConfig),
 		}
-		if handler.bot == nil || handler.r == nil || handler.r2 == nil {
+		if handler.bot == nil || handler.bot2 == nil || handler.r == nil || handler.r2 == nil {
 			time.Sleep(time.Second * 10)
 			continue
 		}
@@ -917,6 +994,11 @@ func main() {
 						grawStop()
 					default:
 					}
+					select {
+					case grawStop := <-grawStopChan:
+						grawStop()
+					default:
+					}
 					return
 				}
 			}
@@ -933,14 +1015,21 @@ func main() {
 			fmt.Println(m[i].Permalink)
 			capture(handler.r.ReadMessage(m[i].ID))
 		}*/
-		grawCfg := graw.Config{Mentions: true}
+		grawCfg := graw.Config{Mentions: true, CommentReplies: true}
 		grawStop, wait, err := graw.Run(handler, handler.bot, grawCfg)
 		if capture(err) {
 			capture(err)
 			time.Sleep(15 * time.Second)
 			continue
 		}
+		grawStop2, wait2, err := graw.Run(handler, handler.bot2, grawCfg)
+		if capture(err) {
+			capture(err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
 		grawStopChan <- grawStop
+		grawStopChan <- grawStop2
 		//ToDo: also get inbox messages to avoid not replying to mentions
 
 		postsStream, err := streamSubredditPosts(handler.r, "all")
@@ -982,7 +1071,7 @@ func main() {
 			}
 		}()
 		fmt.Println("started")
-		fmt.Println("graw run failed: ", wait())
+		fmt.Println("graw run failed: ", wait(), wait2())
 		go func() {
 			commentsStream.Close <- struct{}{}
 			postsStream.Close <- struct{}{}
