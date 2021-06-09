@@ -5,7 +5,7 @@
     "what song is this", "what song is playing", "what track is this"
   ],
   "AntiTriggers": [
-    "has been automatically removed", "your comment was removed",
+    "has been automatically removed", "your comment was removed", "I am a bot",
     "comment here with such low karma", "bot wants to find the best and worst bots"
   ],
   "MaxTriggerTextLength": 400,
@@ -34,8 +34,6 @@
     "wallstreetbets",        "// 45 days",
     "yeagerbomb",            "// 30 days",
     "NormalDayInArabia",     "// 30 days",
-    "Hololive",              "// unknown",
-    "ihaveihaveihavereddit", "// unknown",
 
     "// subreddits that banned the bot",
     "tiktokthots",
@@ -54,35 +52,13 @@
     "LatinoPeopleTwitter", "// deletes all comments",
 
     "// subreddits where BotDefense banned the bot",
-
-    "// won't unban",
     "deadbydaylight",
     "MadeMeSmile",
-    "unrealengine",   "// unless there's a bot-specific summoning",
+    "unrealengine",
     "dataisbeautiful",
     "UberEATS",
     "RealGirls",
     "ak47",
-    "technology",
-    "cosplay",
-    "aww",
-    "motorcycles",
-
-    "// new",
-    "trees",
-    "PewdiepieSubmissions",
-    "teenagers",
-    "Music",
-    "criticalrole",
-    "blackdesertonline",
-    "trashpandas",
-    "bizarrelife",
-    "Rainmeter",
-    "youtubehaiku",
-    "interestingasfuck",
-    "Naruto",
-    "CombatFootage",
-    "fightporn"
   ],
   "ApprovedOn": [
     "// subreddits where BotDefense banned the bot, but the mods unbanned it after I contacted them",
@@ -94,6 +70,22 @@
     "southafrica",
     "1000lbsisters",
     "NarcoFootage",
+    "OnePunchMan",
+    "BecomingTheIceman",
+    "led",
+    "Relatable",
+    "funnyvideos",
+    "Chodi",
+    "brisbane",
+    "hamsters",
+    "trippy",
+    "SeattleWA",
+    "Choices",
+    "bayarea",
+    "neoliberal",
+    "PewdiepieSubmissions",
+    "Tools",
+    "couplesgonewild",
 
     "// subreddits where links work",
     "TikTokCringe",
@@ -109,6 +101,9 @@
   ],
   "DontPostPatreonLinkOn": [
     "BLACKPINK"
+  ],
+  "DontUseFormattingOn": [
+    "tipofmytongue"
   ],
   "RavenDSN": ""
 }
