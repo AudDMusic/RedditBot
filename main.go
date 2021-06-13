@@ -651,6 +651,10 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		fmt.Println("Got an anti-trigger", p.Body)
 		return nil
 	}
+	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
+		fmt.Println("Ignoring a mention from", p.Subreddit, "https://reddit.com"+p.Name)
+		return nil
+	}
 	go func() {
 		capture(r.r.ReadMessage(p.Name))
 	}()
@@ -802,6 +806,10 @@ func (r *auddBot) Post(p *models.Post) {
 	trigger := substringInSlice(compare, r.config.Triggers) ||
 		substringInSlice(strings.ToLower(p.Title), r.config.Triggers)
 	if !trigger {
+		return
+	}
+	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
+		fmt.Println("Ignoring a post from", p.Subreddit, "https://reddit.com"+p.Permalink)
 		return
 	}
 	j, _ := json.Marshal(p)
