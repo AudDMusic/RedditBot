@@ -526,7 +526,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if isLivestream {
 		fmt.Println("\nGot a livestream", resultUrl)
 		if summoned {
-			reply := "I'll listen to the next "+strconv.Itoa(enterpriseChunkLength)+" seconds of the stream and try to identify the song"
+			reply := "I'll listen to the next " + strconv.Itoa(enterpriseChunkLength) + " seconds of the stream and try to identify the song"
 			if rs {
 				go r.r.ReplyWithID(parentID, reply)
 
@@ -548,9 +548,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if timestamp == 0 {
 		timestamp, timestampTo = GetTimeFromText(body)
 	}
-	if timestampTo != 0 && timestampTo - timestamp > limit * enterpriseChunkLength {
+	if timestampTo != 0 && timestampTo-timestamp > limit*enterpriseChunkLength {
 		// recognize music at the middle of the specified interval
-		timestamp += (timestampTo - timestamp - limit * enterpriseChunkLength) / 2
+		timestamp += (timestampTo - timestamp - limit*enterpriseChunkLength) / 2
 	}
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "limit": strconv.Itoa(limit),
