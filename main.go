@@ -104,11 +104,8 @@ func GetTimeFromText(s string) (int, int) {
 		score := 0
 		w2 := ""
 		if strings.Contains(w, "-") {
-			ws := strings.Split(w, "-")
-			w = ws[0]
-			if len(ws) > 1 {
-				w2 = ws[1]
-			}
+			w2 = strings.Split(w, "-")[1]
+			w = strings.Split(w, "-")[0]
 			score += 1
 		}
 		if strings.Contains(w, ":") {
