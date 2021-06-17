@@ -95,6 +95,34 @@ func TimeStringToSeconds(s string) (int, error) {
 	return result, nil
 }
 
+func GetTimeFromText(s string) (int, int) {
+	words := strings.Split(s, " ")
+	Time := 0
+	TimeTo := 0
+	maxScore := 0
+	for _, w := range words {
+		score := 0
+		w2 := ""
+		if strings.Contains(w, "-") {
+			w = strings.Split(w, "-")[0]
+			w2 = strings.Split(w, "-")[1]
+			score += 1
+		}
+		if strings.Contains(w, ":") {
+			score += 2
+		}
+		if score > maxScore {
+			t, err := TimeStringToSeconds(w)
+			if err == nil {
+				Time = t
+				TimeTo, _ = TimeStringToSeconds(w2) // if w2 is empty or not a correct time, TimeTo is 0
+				maxScore = score
+			}
+		}
+	}
+	return Time, TimeTo
+}
+
 func linksFromBody(body string) [][]string {
 	results := markdownRegex.FindAllStringSubmatch(body, -1)
 	//if len(results) == 0 {
@@ -410,7 +438,7 @@ func GetSkipFirstFromLink(Url string) int {
 					tInt = tsInt
 				}
 			}
-			skip += tInt / 12
+			skip += tInt
 			fmt.Println("skip:", skip)
 		}
 	}
@@ -424,6 +452,8 @@ func removeFormatting(response string) string {
 	response = strings.ReplaceAll(response, "^", "")
 	return response
 }
+
+const enterpriseChunkLength = 12
 
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
 	var resultUrl, t, parentID, body, subreddit string
@@ -496,7 +526,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if isLivestream {
 		fmt.Println("\nGot a livestream", resultUrl)
 		if summoned {
-			reply := "I'll listen to the next 12 seconds of the stream and try to identify the song"
+			reply := "I'll listen to the next "+strconv.Itoa(enterpriseChunkLength)+" seconds of the stream and try to identify the song"
 			if rs {
 				go r.r.ReplyWithID(parentID, reply)
 
@@ -513,8 +543,18 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(r.config.ApprovedOn, subreddit)) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl") || isLivestream
 	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
+	timestamp := GetSkipFirstFromLink(resultUrl)
+	timestampTo := 0
+	if timestamp == 0 {
+		timestamp, timestampTo = GetTimeFromText(body)
+	}
+	if timestampTo != 0 && timestampTo - timestamp > limit * enterpriseChunkLength {
+		// recognize music at the middle of the specified interval
+		timestamp += (timestampTo - timestamp - limit * enterpriseChunkLength) / 2
+	}
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
-		map[string]string{"accurate_offsets": "true", "use_timecode": "true", "limit": strconv.Itoa(limit)})
+		map[string]string{"accurate_offsets": "true", "limit": strconv.Itoa(limit),
+			"skip_first_seconds": strconv.Itoa(timestamp)})
 	useFormatting := !stringInSlice(r.config.DontUseFormattingOn, subreddit)
 	response := GetReply(result, withLinks, true, !isLivestream, minScore)
 	if err != nil {
@@ -537,7 +577,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"*I am a bot and this action was performed automatically*",
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
-		"[Donate](https://www.reddit.com/user/auddbot/comments/nuac09/please_consider_donating_and_making_the_bot_happy/)",
+		"[Donate](https://www.reddit.com/r/AudD/comments/nua48w/please_consider_donating_and_making_the_bot_happy/)",
 		//"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition%20" + parentID + ")",
 	}
 	donateLink := 2
@@ -557,7 +597,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		}
 	} else {
 		if result[0].Songs[0].Score == 100 {
-			footerLinks[2] += " ^(If I helped you, please consider supporting me on Patreon. Music recognition costs a lot)"
+			footerLinks[2] += " ^(Please consider supporting me on Patreon. Music recognition costs a lot)"
 		}
 		if result[0].Songs[0].Score < 100 && !isLivestream {
 			footerLinks[0] += " | If the matched percent is less than 100, it could be a false positive result. " +
@@ -579,10 +619,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		fmt.Println("\nStream results:", result)
 	}
 	if response == "" {
-		timestamp := GetSkipFirstFromLink(resultUrl) * 12
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
 			"\n\nI tried to identify music from the [link](%s) at %d-%d seconds.",
-			resultUrl, timestamp, timestamp+limit*12)
+			resultUrl, timestamp, timestamp+limit*enterpriseChunkLength)
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
 			response = "Sorry, I couldn't get the video URL from the post or your comment."
 		}
