@@ -104,8 +104,11 @@ func GetTimeFromText(s string) (int, int) {
 		score := 0
 		w2 := ""
 		if strings.Contains(w, "-") {
-			w = strings.Split(w, "-")[0]
-			w2 = strings.Split(w, "-")[1]
+			ws := strings.Split(w, "-")
+			w = ws[0]
+			if len(ws) > 1 {
+				w2 = ws[1]
+			}
 			score += 1
 		}
 		if strings.Contains(w, ":") {
@@ -337,6 +340,10 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				}
 				links[song.SongLink] = true
 			}
+			song.Title = profanity.MaskProfanity(song.Title, "#")
+			song.Artist = profanity.MaskProfanity(song.Artist, "#")
+			song.Album = profanity.MaskProfanity(song.Album, "#")
+			song.Label = profanity.MaskProfanity(song.Label, "#")
 			score := strconv.Itoa(song.Score) + "%"
 			text := fmt.Sprintf("[**%s** by %s](%s)",
 				song.Title, song.Artist, song.SongLink)
@@ -377,7 +384,6 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			response += fmt.Sprintf("\n\n• %s", text)
 		}
 	}
-	response = profanity.MaskProfanity(response, "#")
 	return response
 }
 
@@ -542,9 +548,8 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	withLinks := (summoned || r.config.ReplySettings[t].SendLinks || stringInSlice(r.config.ApprovedOn, subreddit)) &&
 		!strings.Contains(body, "without links") && !strings.Contains(body, "/wl") || isLivestream
-	// Note that the enterprise endpoint will introduce breaking changes for how the skip parameter is used here
-	timestamp := GetSkipFirstFromLink(resultUrl)
 	timestampTo := 0
+	timestamp := GetSkipFirstFromLink(resultUrl)
 	if timestamp == 0 {
 		timestamp, timestampTo = GetTimeFromText(body)
 	}
