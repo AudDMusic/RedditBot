@@ -3,7 +3,7 @@
   "UserAgent": "",
   "ClientID": "",
   "ClientSecret": "",
-  "BotPasswords": {"auddbot":  "", "RecognizeSong": ""}
+  "BotPasswords": {"auddbot":  "", "RecognizeSong": ""},
   "Triggers": [
     "whats the song", "what is the song", "whats this song", "what is this song", 
     "what song is this", "what song is playing", "what track is this"
