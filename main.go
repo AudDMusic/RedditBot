@@ -41,10 +41,10 @@ type BotConfig struct {
 	LiveStreamMinScore    int                    `json:"LiveStreamMinScore"`
 	CommentsMinScore      int                    `json:"CommentsMinScore"`
 	RavenDSN              string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
-	UserAgent string `json:"UserAgent"`
-	ClientID string `json:"ClientID"`
-	ClientSecret string `json:"ClientSecret"`
-	BotPasswords map[string]string `json:"BotPasswords"`
+	UserAgent             string                 `json:"UserAgent"`
+	ClientID              string                 `json:"ClientID"`
+	ClientSecret          string                 `json:"ClientSecret"`
+	BotPasswords          map[string]string      `json:"BotPasswords"`
 }
 
 type ReplyConfig struct {
@@ -907,13 +907,13 @@ func (c *BotConfig) getReddit1Credentials(username string) reddit1.Bot {
 	bot, err := reddit1.NewBot(
 		reddit1.BotConfig{
 			Agent: c.UserAgent,
-			App:   reddit1.App{
+			App: reddit1.App{
 				ID:       c.ClientID,
 				Secret:   c.ClientSecret,
 				Username: username,
 				Password: c.BotPasswords[username],
 			},
-			Rate:  0,
+			Rate: 0,
 		},
 	)
 
