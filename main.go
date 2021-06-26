@@ -1,20 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"container/ring"
 	"encoding/json"
 	"fmt"
 	"github.com/AudDMusic/audd-go"
 	"github.com/fsnotify/fsnotify"
 	"github.com/getsentry/raven-go"
-	"github.com/golang/protobuf/proto"
 	"github.com/surajJha/go-profanity-hindi"
 	"github.com/ttgmpsn/mira"
 	"github.com/ttgmpsn/mira/models"
 	"github.com/turnage/graw"
 	reddit1 "github.com/turnage/graw/reddit"
-	"github.com/turnage/redditproto"
 	"golang.org/x/time/rate"
 	"io/ioutil"
 	"math"
@@ -44,6 +41,10 @@ type BotConfig struct {
 	LiveStreamMinScore    int                    `json:"LiveStreamMinScore"`
 	CommentsMinScore      int                    `json:"CommentsMinScore"`
 	RavenDSN              string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
+	UserAgent string `json:"UserAgent"`
+	ClientID string `json:"ClientID"`
+	ClientSecret string `json:"ClientSecret"`
+	BotPasswords map[string]string `json:"BotPasswords"`
 }
 
 type ReplyConfig struct {
@@ -58,8 +59,8 @@ var markdownRegex = regexp.MustCompile(`\[[^][]+]\((https?://[^()]+)\)`)
 var rxStrict = xurls.Strict()
 
 const configFile = "config.json"
-const AudDBotConfig = "auddbot.agent"
-const RecognizeSongBotConfig = "RecognizeSong.agent"
+const AudDBotUsername = "auddbot"
+const RecognizeSongBotUsername = "RecognizeSong"
 
 func stringInSlice(slice []string, s string) bool {
 	for i := range slice {
@@ -95,6 +96,13 @@ func TimeStringToSeconds(s string) (int, error) {
 	return result, nil
 }
 
+func SecondsToTimeString(i int, includeHours bool) string {
+	if includeHours {
+		return fmt.Sprintf("%02d:%02d:%02d", i/3600, (i%3600)/60, i%60)
+	}
+	return fmt.Sprintf("%02d:%02d", i/60, i%60)
+}
+
 func GetTimeFromText(s string) (int, int) {
 	words := strings.Split(s, " ")
 	Time := 0
@@ -108,6 +116,8 @@ func GetTimeFromText(s string) (int, int) {
 			w = strings.Split(w, "-")[0]
 			score += 1
 		}
+		w = strings.TrimSuffix(w, "s")
+		w2 = strings.TrimSuffix(w2, "s")
 		if strings.Contains(w, ":") {
 			score += 2
 		}
@@ -264,8 +274,6 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 			}
 		}
 	}
-	// ToDo: parse the the body and check if there's a timestamp; add it to the t URL parameter
-	// (maybe, only when there's no t parameter in the url?)
 	return resultUrl, nil
 }
 
@@ -554,6 +562,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		// recognize music at the middle of the specified interval
 		timestamp += (timestampTo - timestamp - limit*enterpriseChunkLength) / 2
 	}
+	timestampTo = timestamp + limit*enterpriseChunkLength
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "limit": strconv.Itoa(limit),
 			"skip_first_seconds": strconv.Itoa(timestamp)})
@@ -622,8 +631,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	if response == "" {
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
-			"\n\nI tried to identify music from the [link](%s) at %d-%d seconds.",
-			resultUrl, timestamp, timestamp+limit*enterpriseChunkLength)
+			"\n\nI tried to identify music from the [link](%s) at %s-%s seconds.",
+			resultUrl,
+			SecondsToTimeString(timestamp, timestampTo >= 3600), SecondsToTimeString(timestampTo, timestampTo >= 3600))
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
 			response = "Sorry, I couldn't get the video URL from the post or your comment."
 		}
@@ -641,7 +651,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	} else {
 		cr, err = r.r2.ReplyWithID(parentID, response)
 	}
-	if !capture(err) {
+	if err != nil {
+		capture(fmt.Errorf("%v from r/%s", err, subreddit))
+	} else {
 		if len(cr.JSON.Data.Things) > 0 {
 			sentID := string(cr.JSON.Data.Things[0].Data.GetID())
 			comment := myComment{
@@ -697,7 +709,7 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		return nil
 	}
 	go func() {
-		capture(r.r.ReadMessage(p.Name))
+		capture(r.r.Me().ReadMessage(p.Name))
 	}()
 	r.HandleQuery(p, nil, nil)
 	return nil
@@ -721,7 +733,7 @@ func (r *auddBot) CommentReply(p *reddit1.Message) error {
 	if strings.Contains(compare, "bad bot") || strings.Contains(compare, "damn bot") ||
 		strings.Contains(compare, "stupid bot") {
 		myRepliesMu.Lock()
-		comment, exists := myReplies[string(p.ParentID)]
+		comment, exists := myReplies[p.ParentID]
 		myRepliesMu.Unlock()
 		if exists && !comment.summoned {
 			var err2 error
@@ -739,11 +751,11 @@ func (r *auddBot) CommentReply(p *reddit1.Message) error {
 			}
 			if !capture(err) && !capture(err2) {
 				myRepliesMu.Lock()
-				delete(myReplies, string(p.ParentID))
+				delete(myReplies, p.ParentID)
 				myRepliesMu.Unlock()
 			}
 			fmt.Println("got a bad bot comment", "https://reddit.com//comments/"+p.ParentID+"/"+p.ID)
-			capture(r.r.ReadMessage(p.Name))
+			// capture(r.r.ReadMessage(p.Name))
 		}
 	}
 	return nil
@@ -868,24 +880,15 @@ type auddBot struct {
 	r2     *mira.Reddit
 }
 
-func getReddit2Credentials(filename string) *mira.Reddit {
-	buf, err := ioutil.ReadFile(filename)
-	if capture(err) {
-		return nil
-	}
-	agent := &redditproto.UserAgent{}
-	err = proto.UnmarshalText(bytes.NewBuffer(buf).String(), agent)
-	if capture(err) {
-		return nil
-	}
+func (c *BotConfig) getReddit2Credentials(username string) *mira.Reddit {
 	r := mira.Init(mira.Credentials{
-		ClientID:     *agent.ClientId,
-		ClientSecret: *agent.ClientSecret,
-		Username:     *agent.Username,
-		Password:     *agent.Password,
-		UserAgent:    *agent.UserAgent,
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		Username:     username,
+		Password:     c.BotPasswords[username],
+		UserAgent:    c.UserAgent,
 	})
-	err = r.LoginAuth()
+	err := r.LoginAuth()
 	if err != nil {
 		return nil
 	}
@@ -900,17 +903,20 @@ func getReddit2Credentials(filename string) *mira.Reddit {
 	fmt.Printf("You are now logged in, /u/%s\n", rMe.Name)
 	return r
 }
-func getReddit1Credentials(filename string) reddit1.Bot {
-	buf, err := ioutil.ReadFile(filename)
-	if capture(err) {
-		return nil
-	}
-	agent := &redditproto.UserAgent{}
-	err = proto.UnmarshalText(bytes.NewBuffer(buf).String(), agent)
-	if capture(err) {
-		return nil
-	}
-	bot, err := reddit1.NewBotFromAgentFile(filename, 0)
+func (c *BotConfig) getReddit1Credentials(username string) reddit1.Bot {
+	bot, err := reddit1.NewBot(
+		reddit1.BotConfig{
+			Agent: c.UserAgent,
+			App:   reddit1.App{
+				ID:       c.ClientID,
+				Secret:   c.ClientSecret,
+				Username: username,
+				Password: c.BotPasswords[username],
+			},
+			Rate:  0,
+		},
+	)
+
 	if capture(err) {
 		return nil
 	}
@@ -969,8 +975,6 @@ func WatchChanges(filename string, updated chan struct{}, l *rate.Limiter) {
 }
 
 func main() {
-	// ToDo: get the config filename from a parameter
-	// ToDo: move agents settings to the config
 	cfg, err := loadConfig(configFile)
 	if err != nil {
 		panic(err)
@@ -1014,11 +1018,11 @@ func main() {
 		}()
 		handler := &auddBot{
 			config: *cfg,
-			bot:    getReddit1Credentials(AudDBotConfig),
-			bot2:   getReddit1Credentials(RecognizeSongBotConfig),
+			bot:    cfg.getReddit1Credentials(AudDBotUsername),
+			bot2:   cfg.getReddit1Credentials(RecognizeSongBotUsername),
 			audd:   audd.NewClient(cfg.AudDToken),
-			r:      getReddit2Credentials(RecognizeSongBotConfig),
-			r2:     getReddit2Credentials(AudDBotConfig),
+			r:      cfg.getReddit2Credentials(RecognizeSongBotUsername),
+			r2:     cfg.getReddit2Credentials(AudDBotUsername),
 		}
 		if handler.bot == nil || handler.bot2 == nil || handler.r == nil || handler.r2 == nil {
 			time.Sleep(time.Second * 10)
@@ -1079,7 +1083,6 @@ func main() {
 		}
 		grawStopChan <- grawStop
 		grawStopChan <- grawStop2
-		//ToDo: also get inbox messages to avoid not replying to mentions
 
 		postsStream, err := streamSubredditPosts(handler.r, "all")
 		if err != nil {
