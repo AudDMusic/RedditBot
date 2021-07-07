@@ -104,6 +104,7 @@ func SecondsToTimeString(i int, includeHours bool) string {
 }
 
 func GetTimeFromText(s string) (int, int) {
+	s = strings.ReplaceAll(s, " - ", "")
 	words := strings.Split(s, " ")
 	Time := 0
 	TimeTo := 0
@@ -607,10 +608,16 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			return
 		}
 	} else {
-		if result[0].Songs[0].Score == 100 {
+		highestScore := 0
+		for i := range result {
+			if result[i].Songs[0].Score > highestScore {
+				highestScore = result[i].Songs[0].Score
+			}
+		}
+		if highestScore == 100 {
 			footerLinks[2] += " ^(Please consider supporting me on Patreon. Music recognition costs a lot)"
 		}
-		if result[0].Songs[0].Score < 100 && !isLivestream {
+		if highestScore < 100 && !isLivestream {
 			footerLinks[0] += " | If the matched percent is less than 100, it could be a false positive result. " +
 				"I'm still posting it, because sometimes I get it right even if I'm not sure, so it could be helpful. " +
 				"But please don't be mad at me if I'm wrong! I'm trying my best!"
@@ -631,7 +638,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	if response == "" {
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
-			"\n\nI tried to identify music from the [link](%s) at %s-%s seconds.",
+			"\n\nI tried to identify music from the [link](%s) at %s-%s.",
 			resultUrl,
 			SecondsToTimeString(timestamp, timestampTo >= 3600), SecondsToTimeString(timestampTo, timestampTo >= 3600))
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
