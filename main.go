@@ -399,6 +399,7 @@ type d struct {
 }
 
 var avoidDuplicates = map[string]chan d{}
+var avoidDoubleDuplicates= map[string]bool{}
 var avoidDuplicatesMu = &sync.Mutex{}
 
 var myReplies = map[string]myComment{}
@@ -497,6 +498,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	avoidDuplicatesMu.Lock()
 	if c, exists = avoidDuplicates[parentID]; exists {
 		delete(avoidDuplicates, parentID)
+		avoidDoubleDuplicates[parentID] = true
 		avoidDuplicatesMu.Unlock()
 		results := <-c
 		if results.b {
@@ -507,6 +509,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		c = make(chan d, 1)
 		previousUrl = results.u
 	} else {
+		if avoidDoubleDuplicates[parentID] {
+			fmt.Println("Ignored a double duplicate")
+			return
+		}
 		c = make(chan d, 1)
 		avoidDuplicates[parentID] = c
 		avoidDuplicatesMu.Unlock()
@@ -564,9 +570,13 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		timestamp += (timestampTo - timestamp - limit*enterpriseChunkLength) / 2
 	}
 	timestampTo = timestamp + limit*enterpriseChunkLength
+	atTheEnd := "false"
+	if timestamp == 0 && strings.Contains(body, "at the end") && !isLivestream {
+		atTheEnd = "true"
+	}
 	result, err := r.audd.RecognizeLongAudio(resultUrl,
 		map[string]string{"accurate_offsets": "true", "limit": strconv.Itoa(limit),
-			"skip_first_seconds": strconv.Itoa(timestamp)})
+			"skip_first_seconds": strconv.Itoa(timestamp), "reversed_order": atTheEnd})
 	useFormatting := !stringInSlice(r.config.DontUseFormattingOn, subreddit)
 	response := GetReply(result, withLinks, true, !isLivestream, minScore)
 	if err != nil {
@@ -637,10 +647,13 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		fmt.Println("\nStream results:", result)
 	}
 	if response == "" {
+		at := SecondsToTimeString(timestamp, timestampTo >= 3600) + "-" + SecondsToTimeString(timestampTo, timestampTo >= 3600)
+		if atTheEnd == "true" {
+			at = "the end"
+		}
 		response = fmt.Sprintf("Sorry, I couldn't recognize the song."+
-			"\n\nI tried to identify music from the [link](%s) at %s-%s.",
-			resultUrl,
-			SecondsToTimeString(timestamp, timestampTo >= 3600), SecondsToTimeString(timestampTo, timestampTo >= 3600))
+			"\n\nI tried to identify music from the [link](%s) at %s.",
+			resultUrl, at)
 		if strings.Contains(resultUrl, "https://www.reddit.com/") {
 			response = "Sorry, I couldn't get the video URL from the post or your comment."
 		}
