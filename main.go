@@ -510,6 +510,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		previousUrl = results.u
 	} else {
 		if avoidDoubleDuplicates[parentID] {
+			avoidDuplicatesMu.Unlock()
 			fmt.Println("Ignored a double duplicate")
 			return
 		}
