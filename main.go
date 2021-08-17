@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/AudDMusic/audd-go"
+	"github.com/Mihonarium/go-profanity"
 	"github.com/fsnotify/fsnotify"
 	"github.com/getsentry/raven-go"
-	"github.com/surajJha/go-profanity-hindi"
+	"github.com/kodova/html-to-markdown/escape"
 	"github.com/ttgmpsn/mira"
 	"github.com/ttgmpsn/mira/models"
 	"github.com/turnage/graw"
@@ -346,10 +347,14 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				}
 				links[song.SongLink] = true
 			}
-			song.Title = profanity.MaskProfanity(song.Title, "#")
-			song.Artist = profanity.MaskProfanity(song.Artist, "#")
-			song.Album = profanity.MaskProfanity(song.Album, "#")
-			song.Label = profanity.MaskProfanity(song.Label, "#")
+			song.Title = profanity.MaskProfanityWithoutKeepingSpaceTypes(song.Title, "*", 2)
+			song.Artist = profanity.MaskProfanityWithoutKeepingSpaceTypes(song.Artist, "*", 2)
+			song.Album = profanity.MaskProfanityWithoutKeepingSpaceTypes(song.Album, "*", 2)
+			song.Label = profanity.MaskProfanityWithoutKeepingSpaceTypes(song.Label, "*", 2)
+			song.Title = escape.Markdown(song.Title)
+			song.Artist = escape.Markdown(song.Artist)
+			song.Album = escape.Markdown(song.Album)
+			song.Label = escape.Markdown(song.Label)
 			score := strconv.Itoa(song.Score) + "%"
 			text := fmt.Sprintf("[**%s** by %s](%s)",
 				song.Title, song.Artist, song.SongLink)
