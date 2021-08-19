@@ -41,11 +41,33 @@ type BotConfig struct {
 	MaxTriggerTextLength  int                    `json:"MaxTriggerTextLength"`
 	LiveStreamMinScore    int                    `json:"LiveStreamMinScore"`
 	CommentsMinScore      int                    `json:"CommentsMinScore"`
+	PatreonSupporters     []string               `json:"patreon_supporters"`
 	RavenDSN              string                 `default:"" usage:"add a Sentry DSN to capture errors" json:"RavenDSN"`
 	UserAgent             string                 `json:"UserAgent"`
 	ClientID              string                 `json:"ClientID"`
 	ClientSecret          string                 `json:"ClientSecret"`
 	BotPasswords          map[string]string      `json:"BotPasswords"`
+}
+
+var stats = map[string]int{}
+var statsMu = &sync.Mutex{}
+
+func addToStats(t string) int {
+	statsMu.Lock()
+	defer statsMu.Unlock()
+	stats[t]++
+	return stats[t]
+}
+
+func (r *auddBot) getPatreonSupporter(botMentioned, fullMatch bool) string {
+	if !botMentioned || !fullMatch {
+		return ""
+	}
+	if len(r.config.PatreonSupporters) == 0 {
+		return ""
+	}
+	i := addToStats("patreon shout-outs")
+	return r.config.PatreonSupporters[i%len(r.config.PatreonSupporters)]
 }
 
 type ReplyConfig struct {
@@ -404,7 +426,7 @@ type d struct {
 }
 
 var avoidDuplicates = map[string]chan d{}
-var avoidDoubleDuplicates= map[string]bool{}
+var avoidDoubleDuplicates = map[string]bool{}
 var avoidDuplicatesMu = &sync.Mutex{}
 
 var myReplies = map[string]myComment{}
@@ -630,8 +652,14 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 				highestScore = result[i].Songs[0].Score
 			}
 		}
-		if highestScore == 100 {
-			footerLinks[2] += " ^(Please consider supporting me on Patreon. Music recognition costs a lot)"
+		shoutOutToPatreonSupporter := r.getPatreonSupporter(summoned, highestScore == 100)
+		if shoutOutToPatreonSupporter != "" {
+			footerLinks[2] += " ^(Music recognition costs a lot. This result was brought to you by our Patreon supporter, " +
+				shoutOutToPatreonSupporter + ")"
+		} else {
+			if highestScore == 100 {
+				footerLinks[2] += " ^(Please consider supporting me on Patreon. Music recognition costs a lot)"
+			}
 		}
 		if highestScore < 100 && !isLivestream {
 			footerLinks[0] += " | If the matched percent is less than 100, it could be a false positive result. " +
