@@ -54,7 +54,8 @@
     "kpop",
 
     "LatinoPeopleTwitter", "// deletes all comments",
-
+  ],
+  "SubredditsBannedOn": [
     "// subreddits where BotDefense banned the bot",
     "deadbydaylight",
     "MadeMeSmile",
