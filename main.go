@@ -765,6 +765,10 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		fmt.Println("Got an anti-trigger", p.Body)
 		return nil
 	}
+	if stringInSlice([]string{"auddbot", "RecognizeSong"}, p.Author) {
+		fmt.Println("Ignoring a comment from itself", p.Body)
+		return nil
+	}
 	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
 		return nil
 	}
@@ -911,6 +915,11 @@ func (r *auddBot) Comment(p *models.Comment) {
 	myRepliesMu.Unlock()
 	if exists {
 		fmt.Println("Ignoring a comment that's a reply to ours:", "https://reddit.com"+p.Permalink)
+		return
+	}
+	if stringInSlice([]string{"auddbot", "RecognizeSong"}, p.Author) {
+		fmt.Println("Ignoring a comment from itself", p.Body)
+		return
 	}
 	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
 		fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
