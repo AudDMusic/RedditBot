@@ -34,6 +34,7 @@ type BotConfig struct {
 	Triggers              []string               `usage:"phrases bot will react to" json:"Triggers"`
 	AntiTriggers          []string               `usage:"phrases bot will avoid replying to" json:"AudDTAntiTriggers"`
 	IgnoreSubreddits      []string               `usage:"subreddits to ignore" json:"IgnoreSubreddits"`
+	SubredditsBannedOn    []string               `usage:"subreddits auddbot is banned on by BotDefense" json:"SubredditsBannedOn"`
 	ApprovedOn            []string               `usage:"subreddits the bot can post links on" json:"ApprovedOn"`
 	DontPostPatreonLinkOn []string               `usage:"subreddits not to post Patreon links on'" json:"DontPostPatreonLinkOn"`
 	DontUseFormattingOn   []string               `usage:"subreddits not to use formatting on'" json:"DontUseFormattingOn"`
@@ -743,6 +744,12 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 }
 
+func getBannedText(subreddit string) string {
+	return "Hi there,\n\nSorry, the bot was banned on r/" +  subreddit + " - probably automatically by BotDefense - so " +
+		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot. " +
+		"You can also mention u/RecognizeSong instead."
+}
+
 func (r *auddBot) Mention(p *reddit1.Message) error {
 	// Note: it looks like we don't get all the mentions through this
 	// In particular, we don't get mentions in replies to our comments
@@ -759,6 +766,18 @@ func (r *auddBot) Mention(p *reddit1.Message) error {
 		return nil
 	}
 	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
+		return nil
+	}
+	if stringInSlice(r.config.SubredditsBannedOn, p.Subreddit) && !strings.Contains(compare, "u/recognizesong") {
+		avoidDuplicatesMu.Lock()
+		if _, exists := avoidDuplicates[p.ParentID]; exists {
+			avoidDuplicatesMu.Unlock()
+			return nil
+		}
+		c := make(chan d, 1)
+		avoidDuplicates[p.ParentID] = c
+		avoidDuplicatesMu.Unlock()
+		r.r2.Redditor(p.Author).Compose("Sorry, I'm banned on r/"+p.Subreddit, getBannedText(p.Subreddit))
 		fmt.Println("Ignoring a mention from", p.Subreddit, "https://reddit.com"+p.Name)
 		return nil
 	}
@@ -785,7 +804,7 @@ func (r *auddBot) CommentReply(p *reddit1.Message) error {
 	}
 
 	if strings.Contains(compare, "bad bot") || strings.Contains(compare, "damn bot") ||
-		strings.Contains(compare, "stupid bot") {
+		strings.Contains(compare, "stupid bot") || strings.ToLower(p.Body) == "wrong" {
 		myRepliesMu.Lock()
 		comment, exists := myReplies[p.ParentID]
 		myRepliesMu.Unlock()
@@ -897,6 +916,20 @@ func (r *auddBot) Comment(p *models.Comment) {
 		fmt.Println("Ignoring a comment from", p.Subreddit, "https://reddit.com"+p.Permalink)
 		return
 	}
+	if stringInSlice(r.config.SubredditsBannedOn, p.Subreddit) &&
+		!strings.Contains(compare, "u/recognizesong") && strings.Contains(compare, "u/auddbot") {
+		avoidDuplicatesMu.Lock()
+		if _, exists := avoidDuplicates[string(p.ParentID)]; exists {
+			avoidDuplicatesMu.Unlock()
+			return
+		}
+		c := make(chan d, 1)
+		avoidDuplicates[string(p.ParentID)] = c
+		avoidDuplicatesMu.Unlock()
+		r.r2.Redditor(p.Author).Compose("Sorry, I'm banned on r/"+p.Subreddit, getBannedText(p.Subreddit))
+		fmt.Println("Ignoring a mention from", p.Subreddit, "https://reddit.com"+p.Name)
+		return
+	}
 	if substringInSlice(compare, r.config.AntiTriggers) {
 		fmt.Println("Got an anti-trigger", p.Body, "https://reddit.com"+p.Permalink)
 		return
@@ -917,6 +950,20 @@ func (r *auddBot) Post(p *models.Post) {
 	}
 	if stringInSlice(r.config.IgnoreSubreddits, p.Subreddit) {
 		fmt.Println("Ignoring a post from", p.Subreddit, "https://reddit.com"+p.Permalink)
+		return
+	}
+	if stringInSlice(r.config.SubredditsBannedOn, p.Subreddit) &&
+		!strings.Contains(compare, "u/recognizesong") && strings.Contains(compare, "u/auddbot") {
+		avoidDuplicatesMu.Lock()
+		if _, exists := avoidDuplicates[p.ID]; exists {
+			avoidDuplicatesMu.Unlock()
+			return
+		}
+		c := make(chan d, 1)
+		avoidDuplicates[p.ID] = c
+		avoidDuplicatesMu.Unlock()
+		r.r2.Redditor(p.Author).Compose("Sorry, I'm banned on r/"+p.Subreddit, getBannedText(p.Subreddit))
+		fmt.Println("Ignoring a mention from", p.Subreddit, "https://reddit.com"+p.Name)
 		return
 	}
 	j, _ := json.Marshal(p)
