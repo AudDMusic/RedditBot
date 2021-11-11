@@ -343,6 +343,15 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 	return r.GetLinkFromComment(mention, commentsTree, post)
 }
 
+func isEmpty(e ...string) bool {
+	for _, s := range e {
+		if s != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, full bool, minScore int) string {
 	if len(result) == 0 {
 		return ""
@@ -391,14 +400,24 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			if full {
 				album := ""
 				label := ""
+				releaseDate := ""
 				if song.Title != song.Album && song.Album != "" {
 					album = "Album: `" + song.Album + "`. "
 				}
 				if song.Artist != song.Label && song.Label != "Self-released" && song.Label != "" {
 					label = " by `" + song.Label + "`"
 				}
-				text += fmt.Sprintf("\n\n%sReleased on `%s`%s.",
-					album, song.ReleaseDate, label)
+				if song.ReleaseDate != "" {
+					releaseDate = "Released on `" + song.ReleaseDate + "`"
+				} else {
+					if label != "" {
+						label = "Label: " + song.Label
+					}
+				}
+				if !isEmpty(album, label, releaseDate) {
+					text += fmt.Sprintf("\n\n%s%s%s.",
+						album, song.ReleaseDate, label)
+				}
 			}
 			texts = append(texts, text)
 		}
