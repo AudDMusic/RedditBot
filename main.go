@@ -387,6 +387,10 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			song.Artist = escape.Markdown(song.Artist)
 			song.Album = escape.Markdown(song.Album)
 			song.Label = escape.Markdown(song.Label)
+			if strings.Contains(song.Timecode, ":") {
+				ms := strings.Split(song.Timecode, ":"); m, _ := strconv.Atoi(ms[0]); s, _ := strconv.Atoi(ms[1])
+				song.SongLink += "?t=" + strconv.Itoa(m * 60 + s)
+			}
 			score := strconv.Itoa(song.Score) + "%"
 			text := fmt.Sprintf("[**%s** by %s](%s)",
 				song.Title, song.Artist, song.SongLink)
