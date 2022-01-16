@@ -422,7 +422,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				}
 				if !isEmpty(album, label, releaseDate) {
 					text += fmt.Sprintf("\n\n%s%s%s.",
-						album, song.ReleaseDate, label)
+						album, releaseDate, label)
 				}
 			}
 			texts = append(texts, text)
