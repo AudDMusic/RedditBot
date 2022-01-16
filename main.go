@@ -346,10 +346,10 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 func isEmpty(e ...string) bool {
 	for _, s := range e {
 		if s != "" {
-			return true
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, full bool, minScore int) string {
@@ -388,8 +388,10 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			song.Album = escape.Markdown(song.Album)
 			song.Label = escape.Markdown(song.Label)
 			if strings.Contains(song.Timecode, ":") {
-				ms := strings.Split(song.Timecode, ":"); m, _ := strconv.Atoi(ms[0]); s, _ := strconv.Atoi(ms[1])
-				song.SongLink += "?t=" + strconv.Itoa(m * 60 + s)
+				ms := strings.Split(song.Timecode, ":")
+				m, _ := strconv.Atoi(ms[0])
+				s, _ := strconv.Atoi(ms[1])
+				song.SongLink += "?t=" + strconv.Itoa(m*60+s)
 			}
 			score := strconv.Itoa(song.Score) + "%"
 			text := fmt.Sprintf("[**%s** by %s](%s)",
@@ -635,6 +637,9 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		if v, ok := err.(*audd.Error); ok {
 			if v.ErrorCode == 501 {
 				response = fmt.Sprintf("Sorry, I couldn't get any audio from the [link](%s)", resultUrl)
+				if strings.Contains(resultUrl, "youtube.com") || strings.Contains(resultUrl, "youtu.be") {
+					response += ". \n\nSometimes I have trouble with YouTube videos, and don't work for long (usually 1.5h+) videos or ones that are geo-blocked/age-gated. If relevant also note that I don't work for YouTube Clips - I need the direct link to the video and the timestamp, for example `https://youtu.be/AbCdEfGhI at 1:48` or timestamped like `https://youtu.be/AbCdEfGhI?t=1m48s`."
+				}
 				if !r.config.ReplySettings[t].ReplyAlways && !summoned {
 					fmt.Println("not summoned and couldn't get any audio, exiting")
 					return
@@ -768,7 +773,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 }
 
 func getBannedText(subreddit string) string {
-	return "Hi there,\n\nSorry, the bot was banned on r/" +  subreddit + " - probably automatically by BotDefense - so " +
+	return "Hi there,\n\nSorry, the bot was banned on r/" + subreddit + " - probably automatically by BotDefense - so " +
 		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot. " +
 		"You can also mention u/RecognizeSong instead."
 }
