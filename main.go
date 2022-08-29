@@ -656,7 +656,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"*I am a bot and this action was performed automatically*",
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
-		"[Donate](https://www.reddit.com/r/AudD/comments/nua48w/please_consider_donating_and_making_the_bot_happy/)",
+		"[Donate](https://github.com/AudDMusic/RedditBot/wiki/Please-consider-donating)",
 		//"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition%20" + parentID + ")",
 	}
 	donateLink := 2
