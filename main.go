@@ -773,8 +773,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 }
 
 func getBannedText(subreddit string) string {
-	return "Hi there,\n\nSorry, the bot was banned on r/" + subreddit + " - probably automatically by BotDefense - so " +
-		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot. " +
+	return "Hi there,\n\nSorry, the bot was banned on r/" + subreddit + " (probably automatically by BotDefense), so " +
+		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot (that would help a lot!). " +
+		"We manually maintain the list of the subreddits where the bot is banned. Please reply to this message if you think " +
+		"the bot should already be unbanned. Thanks! \n\n" +
 		"You can also mention u/RecognizeSong instead."
 }
 
