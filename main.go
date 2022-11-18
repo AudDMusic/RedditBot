@@ -130,6 +130,7 @@ func SecondsToTimeString(i int, includeHours bool) string {
 func GetTimeFromText(s string) (int, int) {
 	s = strings.ReplaceAll(s, " - ", "")
 	s = strings.ReplaceAll(s, " @", " ")
+	s = strings.ReplaceAll(s, "?", " ")
 	words := strings.Split(s, " ")
 	Time := 0
 	TimeTo := 0
