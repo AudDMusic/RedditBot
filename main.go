@@ -658,7 +658,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		"*I am a bot and this action was performed automatically*",
 		"[GitHub](https://github.com/AudDMusic/RedditBot) " +
 			"[^(new issue)](https://github.com/AudDMusic/RedditBot/issues/new)",
-		"[Donate](https://www.reddit.com/r/AudD/comments/nua48w/please_consider_donating_and_making_the_bot_happy/)",
+		"[Donate](https://github.com/AudDMusic/RedditBot/wiki/Please-consider-donating)",
 		//"[Feedback](/message/compose?to=Mihonarium&subject=Music%20recognition%20" + parentID + ")",
 	}
 	donateLink := 2
@@ -775,8 +775,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 }
 
 func getBannedText(subreddit string) string {
-	return "Hi there,\n\nSorry, the bot was banned on r/" + subreddit + " - probably automatically by BotDefense - so " +
-		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot. " +
+	return "Hi there,\n\nSorry, the bot was banned on r/" + subreddit + " (probably automatically by BotDefense), so " +
+		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot (that would help a lot!). " +
+		"We manually maintain the list of the subreddits where the bot is banned. Please reply to this message if you think " +
+		"the bot should already be unbanned. Thanks! \n\n" +
 		"You can also mention u/RecognizeSong instead."
 }
 
