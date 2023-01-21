@@ -375,6 +375,13 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				song.ReleaseDate = "2016-09-22"
 				song.SongLink = "https://www.youtube.com/watch?v=wJWksPWDKOc"
 			}
+			if strings.Contains(song.SongLink, "youtube.com") {
+				song.SongLink = strings.ReplaceAll(song.SongLink, "https://www.youtube.com/watch?v=", "https://lis.tn/yt/")
+				song.SongLink = strings.ReplaceAll(song.SongLink, "https://youtube.com/watch?v=", "https://lis.tn/yt/")
+			}
+			if strings.Contains(song.SongLink, "youtu.be") {
+				song.SongLink = strings.ReplaceAll(song.SongLink, "https://youtu.be/", "https://lis.tn/yt/")
+			}
 			if song.SongLink != "" {
 				if _, exists := links[song.SongLink]; exists { // making sure this song isn't a duplicate
 					continue
@@ -775,11 +782,13 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 }
 
 func getBannedText(subreddit string) string {
-	return "Hi there,\n\nSorry, the bot was banned on r/" + subreddit + " (probably automatically by BotDefense), so " +
-		"it can't reply there. You can contact the subreddit's moderators and ask them to unban the bot (that would help a lot!). " +
-		"We manually maintain the list of the subreddits where the bot is banned. Please reply to this message if you think " +
-		"the bot should already be unbanned. Thanks! \n\n" +
-		"You can also mention u/RecognizeSong instead."
+	return "Sorry, the bot was banned on r/" + subreddit + ". It's likely a mistake or done automatically by BorDefense. " +
+		"There are many bots on Reddit used for spam, and protecting the community from those is important; but sometimes, " +
+		"genuinely helpful bots, like our u/auddbot, get in the way. We'd be grateful if you could contact the subreddit " +
+		"moderators, explain the situation to them, and ask them to lift the ban. \n\n" +
+		"If they agree to lift the ban, please let us know by replying to this message. We'll then change the bot config " +
+		"so it knows it's unbanned and can now reply to comments on r/" + subreddit + ". Thank you! <3 \n\n" +
+		"(You can also mention u/RecognizeSong instead.)"
 }
 
 func (r *auddBot) Mention(p *reddit1.Message) error {
