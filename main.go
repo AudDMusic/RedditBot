@@ -304,10 +304,10 @@ func (r *auddBot) GetLinkFromComment(mention *reddit1.Message, commentsTree []*m
 	return resultUrl, nil
 }
 
-func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment) (string, error) {
+func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment) (string, string, error) {
 	var post *models.Post
 	if mention == nil && comment == nil {
-		return "", fmt.Errorf("empty mention and comment")
+		return "", "", fmt.Errorf("empty mention and comment")
 	}
 	var parentId models.RedditID
 	commentsTree := make([]*models.Comment, 0)
@@ -317,14 +317,16 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 		parentId = comment.ParentID
 		commentsTree = append(commentsTree, comment)
 	}
+	postId := parentId
 	for parentId != "" {
+		postId = parentId
 		//posts, comments, _, _, err := r.client.Listings.Get(context.Background(), parentId)
 		parent, err := r.r.SubmissionInfoID(parentId)
 		//r.bot.Listing(parentId, )
 		j, _ := json.Marshal(parent)
 		fmt.Printf("parent [%s]: %s\n", string(parentId), string(j))
 		if err != nil && err.Error() != "no results" {
-			return "", err
+			return "", "", err
 		}
 		if err == nil {
 			if p, ok := parent.(*models.Post); ok {
@@ -335,14 +337,15 @@ func (r *auddBot) GetVideoLink(mention *reddit1.Message, comment *models.Comment
 				commentsTree = append(commentsTree, c)
 				parentId = c.ParentID
 			} else {
-				return "", fmt.Errorf("got a result that's neither a post nor a comment, parent ID %s, %v",
+				return "", "", fmt.Errorf("got a result that's neither a post nor a comment, parent ID %s, %v",
 					parentId, parent)
 			}
 		} else {
 			parentId = ""
 		}
 	}
-	return r.GetLinkFromComment(mention, commentsTree, post)
+	l, err := r.GetLinkFromComment(mention, commentsTree, post)
+	return l, string(postId), err
 }
 
 func isEmpty(e ...string) bool {
@@ -354,7 +357,7 @@ func isEmpty(e ...string) bool {
 	return true
 }
 
-func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, full bool, minScore int) string {
+func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, full, showLabel bool, minScore int) string {
 	if len(result) == 0 {
 		return ""
 	}
@@ -420,7 +423,9 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 					album = "Album: `" + song.Album + "`. "
 				}
 				if song.Artist != song.Label && song.Label != "Self-released" && song.Label != "" {
-					label = " by `" + song.Label + "`"
+					if showLabel {
+						label = " by `" + song.Label + "`"
+					}
 				}
 				if song.ReleaseDate != "" {
 					releaseDate = "Released on `" + song.ReleaseDate + "`"
@@ -444,12 +449,14 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 	if len(texts) > 1 {
 		if full {
 			response = "I got matches with these songs:"
-		} else {
-			response = ""
 		}
 		for _, text := range texts {
 			// response += fmt.Sprintf("\n\n%d. %s", i+1, text)
 			response += fmt.Sprintf("\n\n• %s", text)
+		}
+	} else {
+		if full {
+			response = "I got a match with this song:\n\n" + response
 		}
 	}
 	return response
@@ -531,17 +538,20 @@ func removeFormatting(response string) string {
 const enterpriseChunkLength = 12
 
 func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment, post *models.Post) {
-	var resultUrl, t, parentID, body, subreddit string
+	var resultUrl, t, parentID, body, subreddit, author, permalink, postId string
 	var err error
 	if mention != nil {
-		t, parentID, body, subreddit = "mention", mention.Name, mention.Body, mention.Subreddit
+		t, parentID, body, subreddit, author =
+			"mention", mention.Name, mention.Body, mention.Subreddit, mention.Author
 		fmt.Println("\n ! Processing the mention")
 	}
 	if comment != nil {
-		t, parentID, body, subreddit = "comment", string(comment.GetID()), comment.Body, comment.Subreddit
+		t, parentID, body, subreddit, author, permalink =
+			"comment", string(comment.GetID()), comment.Body, comment.Subreddit, comment.Author, comment.Permalink
 	}
 	if post != nil {
-		t, parentID, body, subreddit = "post", string(post.GetID()), post.Selftext, post.Subreddit
+		t, parentID, body, subreddit, author, permalink =
+			"post", string(post.GetID()), post.Selftext, post.Subreddit, post.Author, post.Permalink
 	}
 
 	body = strings.ToLower(body)
@@ -584,7 +594,10 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	if post != nil {
 		resultUrl, err = r.GetLinkFromComment(nil, nil, post)
 	} else {
-		resultUrl, err = r.GetVideoLink(mention, comment)
+		resultUrl, postId, err = r.GetVideoLink(mention, comment)
+		if t == "mention" {
+			permalink = fmt.Sprintf("/r/%s/comments/%s/%s", subreddit, postId, parentID)
+		}
 	}
 	if capture(err) {
 		return
@@ -641,7 +654,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		map[string]string{"accurate_offsets": "true", "limit": strconv.Itoa(limit),
 			"skip_first_seconds": strconv.Itoa(timestamp), "reversed_order": atTheEnd})
 	useFormatting := !stringInSlice(r.config.DontUseFormattingOn, subreddit)
-	response := GetReply(result, withLinks, true, !isLivestream, minScore)
+	response := GetReply(result, withLinks, true, !isLivestream, false, minScore)
 	if err != nil {
 		if v, ok := err.(*audd.Error); ok {
 			if v.ErrorCode == 501 {
@@ -707,7 +720,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 		c <- d{true, resultUrl}
 	}
 	if strings.Contains(body, "find-song") && !summoned {
-		footerLinks[0] += " | ^(find-song went offline; its creator gave me a permission to react to the find-song mentions)"
+		footerLinks[0] += " | ^(find-song's creator gave me a permission to react to the find-song mentions)"
 	}
 	//if len(result) == 0 || !summoned {
 	if len(result) == 0 || stringInSlice(r.config.DontPostPatreonLinkOn, subreddit) {
@@ -745,6 +758,22 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 	}
 	if err != nil {
 		capture(fmt.Errorf("%v from r/%s", err, subreddit))
+		if summoned {
+			subject := "Music found! (but I couldn't post the reply)"
+			if len(result) > 0 && !withLinks {
+				response = GetReply(result, true, true, !isLivestream, true, 0)
+				// PM the result
+			}
+			if len(result) == 0 {
+				subject = "Sorry, I couldn't identify the song"
+			}
+			response = "(In reply to your [mention](https://reddit.com" + permalink + "):)\n\n" + response
+			if rs {
+				r.r.Redditor(author).Compose(subject, response)
+			} else {
+				r.r2.Redditor(author).Compose(subject, response)
+			}
+		}
 	} else {
 		if len(cr.JSON.Data.Things) > 0 {
 			sentID := string(cr.JSON.Data.Things[0].Data.GetID())
@@ -754,7 +783,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			}
 			if !withLinks {
 				response = "Links to the streaming platforms:\n\n"
-				response += GetReply(result, true, false, false, minScore)
+				response += GetReply(result, true, false, false, false, minScore)
 				response += footer
 				if !useFormatting {
 					response = removeFormatting(response)
@@ -779,10 +808,29 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 			myRepliesMu.Unlock()
 		}
 	}
+	if summoned && len(result) > 0 && err == nil {
+		var lowConfidenceResult []audd.RecognitionEnterpriseResult
+		for i := range result {
+			if result[i].Songs[0].Score < minScore {
+				lowConfidenceResult = append(lowConfidenceResult, result[i])
+			}
+		}
+		if len(lowConfidenceResult) > 0 {
+			// PM the result
+			response = GetReply(lowConfidenceResult, true, true, false, true, 0)
+			response = "In reply to your [mention](https://reddit.com" + permalink + "), " +
+				"some additional low-confidence results (likely to be false-positives, but sharing just in case):\n\n" + response
+			if rs {
+				r.r.Redditor(author).Compose("Some additional low-confidence results", response)
+			} else {
+				r.r2.Redditor(author).Compose("Some additional low-confidence results", response)
+			}
+		}
+	}
 }
 
 func getBannedText(subreddit string) string {
-	return "Sorry, the bot was banned on r/" + subreddit + ". It's likely a mistake or done automatically by BorDefense. " +
+	return "Sorry, the bot was banned on r/" + subreddit + ". It's likely a mistake or done automatically by BotDefense. " +
 		"There are many bots on Reddit used for spam, and protecting the community from those is important; but sometimes, " +
 		"genuinely helpful bots, like our u/auddbot, get in the way. We'd be grateful if you could contact the subreddit " +
 		"moderators, explain the situation to them, and ask them to lift the ban. \n\n" +
