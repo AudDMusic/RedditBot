@@ -3,8 +3,10 @@ module redditBot
 go 1.16
 
 require (
-	github.com/AudDMusic/audd-go v0.2.1
+	github.com/AudDMusic/audd-go v0.2.5
 	github.com/Mihonarium/go-profanity v0.0.0-20220116125849-662cde2e1ad4
+	github.com/Mihonarium/golongpoll v1.2.0 // indirect
+	github.com/bogem/id3v2 v1.2.0 // indirect
 	github.com/certifi/gocertifi v0.0.0-20200922220541-2c3bb06c6054 // indirect
 	github.com/cristalhq/aconfig v0.13.1 // indirect
 	github.com/fsnotify/fsnotify v1.4.9
