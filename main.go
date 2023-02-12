@@ -447,6 +447,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 	}
 	response := texts[0]
 	if len(texts) > 1 {
+		response = ""
 		if full {
 			response = "I got matches with these songs:"
 		}
@@ -782,7 +783,7 @@ func (r *auddBot) HandleQuery(mention *reddit1.Message, comment *models.Comment,
 				commentID: sentID,
 			}
 			if !withLinks {
-				response = "Links to the streaming platforms:\n\n"
+				response = "Apple Music, Spotify, YouTube, etc.:\n\n"
 				response += GetReply(result, true, false, false, false, minScore)
 				response += footer
 				if !useFormatting {
