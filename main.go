@@ -363,6 +363,14 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 	}
 	links := map[string]bool{}
 	texts := make([]string, 0)
+	numResults := 0
+	for _, results := range result {
+		for _, song := range results.Songs {
+			if song.Score >= minScore {
+				numResults++
+			}
+		}
+	}
 	for _, results := range result {
 		if len(results.Songs) == 0 {
 			capture(fmt.Errorf("enterprise response has a result without any songs"))
@@ -371,6 +379,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 			if song.Score < minScore {
 				continue
 			}
+
 			if song.SongLink == "https://lis.tn/rvXTou" || song.SongLink == "https://lis.tn/XIhppO" {
 				song.Artist = "The Caretaker (Leyland James Kirby)"
 				song.Title = "Everywhere at the End of Time - Stage 1"
@@ -412,26 +421,39 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 				text = fmt.Sprintf("**%s** by %s",
 					song.Title, song.Artist)
 			}
+			scoreInfo := ""
 			if matched {
 				text += fmt.Sprintf(" (%s; matched: `%s`)", song.Timecode, score)
+				scoreInfo = fmt.Sprintf("\n\n**Score:** %s (timecode: %s)", score, song.Timecode)
 			}
-			if full {
+			if numResults == 1 && full {
+				text = fmt.Sprintf("**Name:** %s\n\n**Artist:** %s%s",
+					song.Title, song.Artist, scoreInfo)
+				// if full {
+				text += fmt.Sprintf("\n\n**Album:** %s\n\n**Label:** %s\n\n**Released on:** %s",
+					song.Album, song.Label, song.ReleaseDate)
+				// }
+				if withLinks {
+					text += fmt.Sprintf("\n\n[Apple Music, Spotify, YouTube, etc.](%s)", song.SongLink)
+				}
+			}
+			if full && numResults > 1 {
 				album := ""
 				label := ""
 				releaseDate := ""
 				if song.Title != song.Album && song.Album != "" {
-					album = "Album: `" + song.Album + "`. "
+					album = "**Album**: " + song.Album + ". "
 				}
 				if song.Artist != song.Label && song.Label != "Self-released" && song.Label != "" {
 					if showLabel {
-						label = " by `" + song.Label + "`"
+						label = " **by** " + song.Label
 					}
 				}
 				if song.ReleaseDate != "" {
-					releaseDate = "Released on `" + song.ReleaseDate + "`"
+					releaseDate = "**Released on** " + song.ReleaseDate
 				} else {
 					if label != "" {
-						label = "Label: " + song.Label
+						label = "**Label**: " + song.Label
 					}
 				}
 				if !isEmpty(album, label, releaseDate) {
@@ -457,7 +479,7 @@ func GetReply(result []audd.RecognitionEnterpriseResult, withLinks, matched, ful
 		}
 	} else {
 		if full {
-			response = "I got a match with this song:\n\n" + response
+			response = "**Song Found!**\n\n" + response
 		}
 	}
 	return response
