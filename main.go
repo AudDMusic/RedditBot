@@ -1135,7 +1135,7 @@ func (c *BotConfig) getReddit1Credentials(username string) reddit1.Bot {
 				Username: username,
 				Password: c.BotPasswords[username],
 			},
-			Rate: 0,
+			Rate: time.Second * 10,
 		},
 	)
 
@@ -1290,7 +1290,7 @@ func main() {
 			fmt.Println(m[i].Permalink)
 			capture(handler.r.ReadMessage(m[i].ID))
 		}*/
-		grawCfg := graw.Config{Mentions: true, CommentReplies: true}
+		grawCfg := graw.Config{Mentions: true}
 		grawStop, wait, err := graw.Run(handler, handler.bot, grawCfg)
 		if capture(err) {
 			capture(err)
@@ -1415,7 +1415,7 @@ func streamSubredditComments(c *mira.Reddit, name string) (*mira.SubmissionStrea
 	var last models.RedditID
 	go func() {
 		sent := ring.New(100)
-		T := time.NewTicker(time.Millisecond * 1300)
+		T := time.NewTicker(time.Millisecond * 1500)
 		for {
 			select {
 			case <-s.Close:
